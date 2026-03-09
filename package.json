@@ -1,5 +1,5 @@
 {
-  "name": "project-pocket-tutor-app",
+  "name": "pocket-tutor-app",
   "version": "0.0.1",
   "description": "",
   "author": "",
@@ -75,7 +75,7 @@
     "testEnvironment": "node"
   },
   "lint-staged": {
-    "*.{ts,js}": [
+    "*.ts": [
       "eslint --fix",
       "prettier --write"
     ]
