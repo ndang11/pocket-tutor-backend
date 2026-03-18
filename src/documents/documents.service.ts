@@ -1,13 +1,52 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import * as mammoth from 'mammoth';
+
+const pdfParse = require('pdf-parse');
 
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabase: SupabaseService,
   ) {}
+
+  private async extractText(file: Express.Multer.File): Promise<string> {
+    const ext = file.originalname.split('.').pop()?.toLowerCase();
+
+    if (ext === 'pdf') {
+      try {
+        const result = await pdfParse(file.buffer);
+        return result.text || ' ';
+      } catch (err) {
+        this.logger.error(`Failed to parse PDF: ${err.message}`);
+        return ''; 
+      }
+   
+    }
+
+    if (ext === 'docx') {
+      try {
+        const result = await mammoth.extractRawText({ buffer: file.buffer });
+        return result.value || ' ';
+      } catch (err) {
+        this.logger.error(`Failed to parse DOCX: ${err.message}`)
+        return ''; 
+      }
+    
+    }
+
+    if (ext === 'txt') {
+      return file.buffer.toString('utf-8');
+    }
+
+    throw new BadRequestException(
+      'Unsupported file type. Please upload a PDF, DOCX, or TXT file.',
+    );
+  }
 
   async uploadAndRecord(
     file: Express.Multer.File,
@@ -18,7 +57,7 @@ export class DocumentsService {
     if (!userId?.trim() || !title?.trim())
       throw new BadRequestException('userId and title are required');
 
-    const fileExt = file.originalname.split('.').pop();
+    const fileExt = file.originalname.split('.').pop()?.toLowerCase();
     if (!fileExt || fileExt === file.originalname)
       throw new BadRequestException('Could not determine file extension');
 
@@ -34,8 +73,19 @@ export class DocumentsService {
 
     if (error) throw new BadRequestException(`Storage Error: ${error.message}`);
 
-    return this.prisma.documentation.create({
+    const extractedText = await this.extractText(file);
+    this.logger.log(
+      `Extracted ${extractedText.length} characters from ${file.originalname}`,
+    );
+
+    const document = await this.prisma.documentation.create({
       data: { title, path: data.path, userId },
     });
+
+    return {
+      ...document,
+      extractedTextLength: extractedText.length,
+      preview: extractedText.slice(0, 200),
+    };
   }
 }
