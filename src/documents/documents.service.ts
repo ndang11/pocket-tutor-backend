@@ -60,7 +60,7 @@ export class DocumentsService {
     if (!fileExt || fileExt === file.originalname)
       throw new BadRequestException('Could not determine file extension');
 
-    // ── Step 1: Upload to Supabase Storage ──────────────────────────────
+
     const storagePath = `${userId}/${Date.now()}.${fileExt}`;
 
     const { data, error } = await this.supabase
@@ -73,26 +73,25 @@ export class DocumentsService {
 
     if (error) throw new BadRequestException(`Storage Error: ${error.message}`);
 
-    // ── Step 2: Extract text ─────────────────────────────────────────────
+
     const extractedText = await this.extractText(file);
     this.logger.log(
       `Extracted ${extractedText.length} characters from ${file.originalname}`,
     );
 
-    // ── Step 3: Save document record to database ─────────────────────────
+
     const document = await this.prisma.documentation.create({
       data: { title, path: data.path, userId },
     });
 
-    // ── Step 4: Chunk + Embed + Store vectors ────────────────────────────
+
     if (extractedText.trim().length > 0) {
       const chunks = await this.embedding.chunkAndEmbed(extractedText);
 
       for (let i = 0; i < chunks.length; i++) {
         const { chunk, embedding } = chunks[i];
 
-        // Store each chunk with its vector using raw SQL via Supabase
-        // We use Supabase client here because Prisma does not support vector type
+
         const { error: chunkError } = await this.supabase
           .getClient()
           .from('document_chunks')
