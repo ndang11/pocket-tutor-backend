@@ -6,6 +6,10 @@ export class SupabaseService implements OnModuleInit {
   private readonly logger = new Logger(SupabaseService.name);
   private clientInstance: SupabaseClient;
 
+  get storage(){
+    return this.clientInstance.storage 
+  }
+
   constructor() {
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;

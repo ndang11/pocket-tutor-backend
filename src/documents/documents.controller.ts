@@ -1,22 +1,30 @@
-// src/documents/documents.controller.ts
-import { Controller, Post, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, UseInterceptors, UploadedFile, Body } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { SupabaseService } from '../superbase/superbase.service';
+import { memoryStorage } from 'multer';
+import { DocumentsService } from './documents.service'; 
 
 @Controller('documents')
 export class DocumentsController {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly documentsService: DocumentsService) {}
 
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file')) // 'file' is the key in FormData
-  async uploadDocument(@UploadedFile() file: Express.Multer.File) {
-    // 1. Upload to Supabase Storage
-    const storageData = await this.supabaseService.uploadFile(file, 'pamphlets');
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+  })) 
+  async uploadDocument(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('userId') userId: string,
+    @Body('title') title: string,
+  ) {
+    console.log('FILE:', file?.originalname);
+    console.log('USERID:', userId);
+    console.log('TITLE:', title);
     
-    // 2. Return the path to the frontend
+    const result = await this.documentsService.uploadAndRecord(file, userId, title);
+    
     return {
-      message: 'Upload successful',
-      path: storageData.path,
+      message: 'Document processed successfully',
+      data: result,
     };
   }
 }
