@@ -6,8 +6,8 @@ export class SupabaseService implements OnModuleInit {
   private readonly logger = new Logger(SupabaseService.name);
   private clientInstance: SupabaseClient;
 
-  get storage(){
-    return this.clientInstance.storage 
+  get storage() {
+    return this.clientInstance.storage;
   }
 
   constructor() {
@@ -15,7 +15,9 @@ export class SupabaseService implements OnModuleInit {
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!url || !key) {
-      throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment variables');
+      throw new Error(
+        'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment variables',
+      );
     }
 
     this.clientInstance = createClient(url, key);
@@ -40,8 +42,7 @@ export class SupabaseService implements OnModuleInit {
   async uploadFile(file: Express.Multer.File, folder: string) {
     const fileName = `${folder}/${Date.now()}-${file.originalname}`;
 
-    const { data, error } = await this.clientInstance 
-      .storage
+    const { data, error } = await this.clientInstance.storage
       .from('documents')
       .upload(fileName, file.buffer, {
         contentType: file.mimetype,
@@ -55,4 +56,4 @@ export class SupabaseService implements OnModuleInit {
   getClient() {
     return this.clientInstance;
   }
-} 
+}

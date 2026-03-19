@@ -65,29 +65,31 @@ export class ChatService {
     ${question}
 
     Provide a clear, educational answer based only on the context above.`;
-try {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-    const result = await model.generateContent(prompt);
-    const answer = result.response.text();
+    try {
+      const model = this.genAI.getGenerativeModel({
+        model: 'gemini-2.0-flash-lite',
+      });
+      const result = await model.generateContent(prompt);
+      const answer = result.response.text();
 
-    this.logger.log('Answer generated successfully');
+      this.logger.log('Answer generated successfully');
 
-    return {
-      question,
-      answer,
-      sourcesUsed: chunks.length,
-      sources: chunks.map((c: any) => ({
-        chunkIndex: c.chunk_index,
-        preview: c.content.slice(0, 100),
-      })),
-    };
-} catch (err) {
-    if (err?.status === 429) {
+      return {
+        question,
+        answer,
+        sourcesUsed: chunks.length,
+        sources: chunks.map((c: any) => ({
+          chunkIndex: c.chunk_index,
+          preview: c.content.slice(0, 100),
+        })),
+      };
+    } catch (err) {
+      if (err?.status === 429) {
         throw new BadRequestException(
           'Gemini API quota exceeded. Please try again tomorrow or add billing at aistudio.google.com',
         );
       }
       throw new BadRequestException(`Gemini error: ${err.message}`);
-}
+    }
   }
 }

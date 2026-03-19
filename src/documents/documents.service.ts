@@ -60,7 +60,6 @@ export class DocumentsService {
     if (!fileExt || fileExt === file.originalname)
       throw new BadRequestException('Could not determine file extension');
 
-
     const storagePath = `${userId}/${Date.now()}.${fileExt}`;
 
     const { data, error } = await this.supabase
@@ -73,24 +72,20 @@ export class DocumentsService {
 
     if (error) throw new BadRequestException(`Storage Error: ${error.message}`);
 
-
     const extractedText = await this.extractText(file);
     this.logger.log(
       `Extracted ${extractedText.length} characters from ${file.originalname}`,
     );
 
-
     const document = await this.prisma.documentation.create({
       data: { title, path: data.path, userId },
     });
-
 
     if (extractedText.trim().length > 0) {
       const chunks = await this.embedding.chunkAndEmbed(extractedText);
 
       for (let i = 0; i < chunks.length; i++) {
         const { chunk, embedding } = chunks[i];
-
 
         const { error: chunkError } = await this.supabase
           .getClient()
@@ -104,7 +99,9 @@ export class DocumentsService {
           });
 
         if (chunkError) {
-          this.logger.error(`Failed to store chunk ${i}: ${chunkError.message}`);
+          this.logger.error(
+            `Failed to store chunk ${i}: ${chunkError.message}`,
+          );
         }
       }
 

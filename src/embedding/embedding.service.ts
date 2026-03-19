@@ -8,12 +8,12 @@ export class EmbeddingService {
 
   constructor() {
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey)
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey)
         throw new Error('Missing GEMINI_API_KEY in environment variables');
-        this.genAI = new GoogleGenerativeAI(apiKey);
+      this.genAI = new GoogleGenerativeAI(apiKey);
     } catch (err) {
-        console.error(err.message)
+      console.error(err.message);
     }
   }
 
@@ -35,12 +35,14 @@ export class EmbeddingService {
     const model = this.genAI.getGenerativeModel({
       model: 'gemini-embedding-001',
     });
-  
+
     const result = await model.embedContent(text);
     return result.embedding.values;
   }
 
-  async chunkAndEmbed(text: string): Promise<{ chunk: string; embedding: number[] }[]> {
+  async chunkAndEmbed(
+    text: string,
+  ): Promise<{ chunk: string; embedding: number[] }[]> {
     const chunks = this.chunkText(text);
     this.logger.log(`Chunking text into ${chunks.length} chunks`);
 
