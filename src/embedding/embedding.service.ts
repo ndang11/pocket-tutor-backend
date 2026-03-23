@@ -7,27 +7,20 @@ export class EmbeddingService {
   private readonly genAI: GoogleGenerativeAI;
 
   constructor() {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey)
-        throw new Error('Missing GEMINI_API_KEY in environment variables');
-      this.genAI = new GoogleGenerativeAI(apiKey);
-    } catch (err) {
-      console.error(err.message);
-    }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('Missing GEMINI_API_KEY in environment variables');
+    this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
   chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
     const words = text.split(/\s+/).filter(Boolean);
     const chunks: string[] = [];
-
     let start = 0;
     while (start < words.length) {
       const end = Math.min(start + chunkSize, words.length);
       chunks.push(words.slice(start, end).join(' '));
       start += chunkSize - overlap;
     }
-
     return chunks;
   }
 
@@ -35,7 +28,6 @@ export class EmbeddingService {
     const model = this.genAI.getGenerativeModel({
       model: 'gemini-embedding-001',
     });
-
     const result = await model.embedContent(text);
     return result.embedding.values;
   }
@@ -51,6 +43,7 @@ export class EmbeddingService {
     for (const chunk of chunks) {
       const embedding = await this.embedText(chunk);
       results.push({ chunk, embedding });
+      await new Promise(res => setTimeout(res, 500));
     }
 
     this.logger.log(`Generated ${results.length} embeddings`);
