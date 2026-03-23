@@ -26,7 +26,6 @@ export class ChatService {
     });
   }
 
-  // ── Shared prompt builder ──────────────────────────────────────────
   private buildPrompt(context: string, question: string): string {
     return `You are Pocket Tutor, a strict pedagogical AI assistant.
 You must only answer using the document context provided below.
@@ -42,14 +41,14 @@ ${question}
 Provide a clear, educational answer based only on the context above.`;
   }
 
-  // ── Primary: Gemini ────────────────────────────────────────────────
+ 
   private async askGemini(prompt: string): Promise<string> {
     const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
     const result = await model.generateContent(prompt);
     return result.response.text();
   }
 
-  // ── Fallback: Groq (llama-3.3-70b) ────────────────────────────────
+
   private async askGroq(prompt: string): Promise<string> {
     const completion = await this.groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
@@ -58,7 +57,7 @@ Provide a clear, educational answer based only on the context above.`;
     return completion.choices[0].message.content ?? '';
   }
 
-  // ── Main ask method ────────────────────────────────────────────────
+ 
   async ask(documentId: string, userId: string, question: string) {
     if (!documentId?.trim() || !userId?.trim() || !question?.trim()) {
       throw new BadRequestException(
@@ -97,7 +96,7 @@ Provide a clear, educational answer based only on the context above.`;
 
     const prompt = this.buildPrompt(context, question);
 
-    // ── Try Gemini first, fall back to Groq on any failure ──────────
+   
     let answer: string;
     let modelUsed: string;
 
@@ -125,13 +124,14 @@ Provide a clear, educational answer based only on the context above.`;
     return {
       question,
       answer,
-      modelUsed, // useful for debugging which model answered
+      modelUsed, 
       sourcesUsed: chunks.length,
       sources: chunks.map((c: any) => ({
         chunkIndex: c.chunk_index,
         preview: c.content.slice(0, 100),
       })),
     };
+
   }
 
   // ── Summarise notes (uses Groq directly — cheap and fast) ─────────

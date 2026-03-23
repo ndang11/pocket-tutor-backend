@@ -1,8 +1,12 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { validateEnv, env } from './config/env';
 
 async function bootstrap() {
+  // Validate environment variables
+  validateEnv();
+
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
@@ -17,4 +21,5 @@ async function bootstrap() {
     `CORS:    ${process.env.ALLOWED_ORIGINS}`,
   );
 }
-bootstrap();
+
+void bootstrap();

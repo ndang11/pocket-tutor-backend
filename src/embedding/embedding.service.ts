@@ -32,7 +32,9 @@ export class EmbeddingService {
     return result.embedding.values;
   }
 
-  async chunkAndEmbed(text: string): Promise<{ chunk: string; embedding: number[] }[]> {
+  async chunkAndEmbed(
+    text: string,
+  ): Promise<{ chunk: string; embedding: number[] }[]> {
     const chunks = this.chunkText(text);
     this.logger.log(`Chunking text into ${chunks.length} chunks`);
 
