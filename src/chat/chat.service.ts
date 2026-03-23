@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
   private readonly genAI: GoogleGenerativeAI;
-  private readonly groq: OpenAI; 
+  private readonly groq: OpenAI;
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -41,13 +41,11 @@ ${question}
 Provide a clear, educational answer based only on the context above.`;
   }
 
- 
   private async askGemini(prompt: string): Promise<string> {
     const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
     const result = await model.generateContent(prompt);
     return result.response.text();
   }
-
 
   private async askGroq(prompt: string): Promise<string> {
     const completion = await this.groq.chat.completions.create({
@@ -57,7 +55,6 @@ Provide a clear, educational answer based only on the context above.`;
     return completion.choices[0].message.content ?? '';
   }
 
- 
   async ask(documentId: string, userId: string, question: string) {
     if (!documentId?.trim() || !userId?.trim() || !question?.trim()) {
       throw new BadRequestException(
@@ -96,25 +93,22 @@ Provide a clear, educational answer based only on the context above.`;
 
     const prompt = this.buildPrompt(context, question);
 
-   
     let answer: string;
     let modelUsed: string;
 
     try {
-      answer = await this.askGemini(prompt);
-      modelUsed = 'gemini-2.0-flash-lite';
-      this.logger.log('Answer generated via Gemini');
-    } catch (geminiErr) {
-      this.logger.warn(
-        `Gemini failed (${geminiErr?.status ?? geminiErr?.message}), falling back to Groq`,
-      );
+      answer = await this.askGroq(prompt);
+      modelUsed = 'llama-3.3-70b-versatile (groq)';
+      this.logger.log(`Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`);
+    } catch (groqErr) {
+      this.logger.warn(`Groq failed — ${groqErr?.message}, falling back to Gemini...`);
 
       try {
-        answer = await this.askGroq(prompt);
-        modelUsed = 'llama-3.3-70b-versatile (groq)';
-        this.logger.log('Answer generated via Groq fallback');
-      } catch (groqErr) {
-        this.logger.error('Both Gemini and Groq failed', groqErr.message);
+        answer = await this.askGemini(prompt);
+        modelUsed = 'gemini-2.0-flash-lite';
+        this.logger.log(`Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`);
+      } catch (geminiErr) {
+        this.logger.error('Both Groq and Gemini failed', geminiErr.message);
         throw new BadRequestException(
           'AI service temporarily unavailable. Please try again in a moment.',
         );
@@ -124,17 +118,15 @@ Provide a clear, educational answer based only on the context above.`;
     return {
       question,
       answer,
-      modelUsed, 
+      modelUsed,
       sourcesUsed: chunks.length,
       sources: chunks.map((c: any) => ({
         chunkIndex: c.chunk_index,
         preview: c.content.slice(0, 100),
       })),
     };
-
   }
 
-  // ── Summarise notes (uses Groq directly — cheap and fast) ─────────
   async getSummary(content: string): Promise<string> {
     const completion = await this.groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
