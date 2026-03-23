@@ -96,6 +96,7 @@ Provide a clear, educational answer based only on the context above.`;
     let answer: string;
     let modelUsed: string;
 
+    // ── Groq is primary. If it fails, Gemini is the fallback. ────────
     try {
       answer = await this.askGroq(prompt);
       modelUsed = 'llama-3.3-70b-versatile (groq)';

@@ -3,11 +3,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
-const pdfParse = require('pdf-parse');
 
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
+  private pdfParse: any;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -15,15 +15,23 @@ export class DocumentsService {
     private readonly embedding: EmbeddingService,
   ) {}
 
+  async onModuleInit() {
+    // Dynamically import pdf-parse when the module initializes
+    this.pdfParse = (await import('pdf-parse')).default;
+  }
+
   private async extractText(file: Express.Multer.File): Promise<string> {
     const ext = file.originalname.split('.').pop()?.toLowerCase();
 
     if (ext === 'pdf') {
       try {
-        const result = await pdfParse(file.buffer);
-        return result.text || '';
-      } catch (err) {
-        this.logger.error(`Failed to parse PDF: ${err.message}`);
+        if (!this.pdfParse) {
+          this.pdfParse = (await import('pdf-parse')).default;
+        }
+        const data = await this.pdfParse(file.buffer);
+        return data.text || '';
+      } catch (error) {
+        this.logger.error(`Failed to parse PDF: ${error.message}`);
         return '';
       }
     }
@@ -45,6 +53,36 @@ export class DocumentsService {
     throw new BadRequestException(
       'Unsupported file type. Please upload a PDF, DOCX, or TXT file.',
     );
+  }
+
+
+  async getByUser(userId: string) {
+    return this.prisma.documentation.findMany({
+      where: { userId },
+      orderBy: { created_at: 'desc' },  
+    });
+  }
+
+  async deleteByPath(path: string) {
+    const { error } = await this.supabase
+      .getClient()
+      .storage.from('documents')
+      .remove([path]);
+  
+    if (error)
+      throw new BadRequestException(`Storage delete failed: ${error.message}`);
+ 
+    const doc = await this.prisma.documentation.findFirst({
+      where: { path },
+    });
+  
+    if (!doc) throw new BadRequestException('Document not found');
+  
+    await this.prisma.documentation.delete({
+      where: { id: doc.id },
+    });
+  
+    return { message: 'Document deleted successfully' };
   }
 
   async uploadAndRecord(
@@ -99,9 +137,7 @@ export class DocumentsService {
           });
 
         if (chunkError) {
-          this.logger.error(
-            `Failed to store chunk ${i}: ${chunkError.message}`,
-          );
+          this.logger.error(`Failed to store chunk ${i}: ${chunkError.message}`);
         }
       }
 
