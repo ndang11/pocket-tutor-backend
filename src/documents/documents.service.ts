@@ -33,10 +33,6 @@ export class DocumentsService {
         return data.text || '';
       } catch (error) {
         return await this.parsePdf(file.buffer);
-      } catch (err) {
-        const error = err as Error;
-        this.logger.error(`Failed to parse PDF: ${error.message}`);
-        return '';
       }
     }
 
