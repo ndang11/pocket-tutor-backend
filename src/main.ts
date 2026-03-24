@@ -6,7 +6,7 @@ import * as express from 'express';
 
 async function bootstrap() {
 
-  validateEnv();
+  validateEnv(); ,
 
   const app = await NestFactory.create(AppModule);
   
@@ -14,7 +14,7 @@ async function bootstrap() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-
+''
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
