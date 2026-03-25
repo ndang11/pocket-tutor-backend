@@ -1,4 +1,10 @@
-import { Controller, Post, Body, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { ChatService } from './chat.service';
 
 @Controller('chat')
@@ -13,15 +19,19 @@ export class ChatController {
     @Body('userId') userId: string,
     @Body('question') question: string,
   ) {
-    this.logger.log(`Received request: documentId=${documentId}, userId=${userId}, question=${question?.substring(0, 50)}...`);
-    
+    this.logger.log(
+      `Received request: documentId=${documentId}, userId=${userId}, question=${question?.substring(0, 50)}...`,
+    );
+
     if (!documentId?.trim() || !userId?.trim() || !question?.trim()) {
-      this.logger.error(`Missing fields - documentId: ${!!documentId}, userId: ${!!userId}, question: ${!!question}`);
+      this.logger.error(
+        `Missing fields - documentId: ${!!documentId}, userId: ${!!userId}, question: ${!!question}`,
+      );
       throw new BadRequestException(
         'documentId, userId and question are required',
       );
     }
-    
+
     return this.chatService.ask(documentId, userId, question);
   }
 }
