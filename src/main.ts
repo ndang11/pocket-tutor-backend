@@ -6,7 +6,7 @@ import * as express from 'express';
 
 async function bootstrap() {
 
-  validateEnv(); ,
+  validateEnv(); 
 
   const app = await NestFactory.create(AppModule);
   
