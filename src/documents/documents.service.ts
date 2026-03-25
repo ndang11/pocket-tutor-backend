@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
 
+import { PdfReader } from 'pdfreader';
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
@@ -31,8 +32,7 @@ export class DocumentsService {
         const data = await this.pdfParse(file.buffer);
         return data.text || '';
       } catch (error) {
-        this.logger.error(`Failed to parse PDF: ${error.message}`);
-        return '';
+        return await this.parsePdf(file.buffer);
       }
     }
 
@@ -41,7 +41,8 @@ export class DocumentsService {
         const result = await mammoth.extractRawText({ buffer: file.buffer });
         return result.value || '';
       } catch (err) {
-        this.logger.error(`Failed to parse DOCX: ${err.message}`);
+        const error = err as Error;
+        this.logger.error(`Failed to parse DOCX: ${error.message}`);
         return '';
       }
     }
@@ -55,11 +56,10 @@ export class DocumentsService {
     );
   }
 
-
   async getByUser(userId: string) {
     return this.prisma.documentation.findMany({
       where: { userId },
-      orderBy: { created_at: 'desc' },  
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -68,21 +68,44 @@ export class DocumentsService {
       .getClient()
       .storage.from('documents')
       .remove([path]);
-  
+
     if (error)
       throw new BadRequestException(`Storage delete failed: ${error.message}`);
- 
+
     const doc = await this.prisma.documentation.findFirst({
       where: { path },
     });
-  
+
     if (!doc) throw new BadRequestException('Document not found');
-  
+
     await this.prisma.documentation.delete({
       where: { id: doc.id },
     });
-  
+
     return { message: 'Document deleted successfully' };
+  }
+
+  private async parsePdf(buffer: Buffer): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const textParts: string[] = [];
+
+      new PdfReader().parseBuffer(buffer, (err, item) => {
+        if (err) {
+          reject(new Error(String(err)));
+          return;
+        }
+
+        if (!item) {
+          // End of parsing
+          resolve(textParts.join(' '));
+          return;
+        }
+
+        if (item.text) {
+          textParts.push(item.text);
+        }
+      });
+    });
   }
 
   async uploadAndRecord(
@@ -97,6 +120,18 @@ export class DocumentsService {
     const fileExt = file.originalname.split('.').pop()?.toLowerCase();
     if (!fileExt || fileExt === file.originalname)
       throw new BadRequestException('Could not determine file extension');
+
+    // Ensure profile exists for this user
+    let profile = await this.prisma.profile.findUnique({
+      where: { id: userId },
+    });
+
+    if (!profile) {
+      profile = await this.prisma.profile.create({
+        data: { id: userId },
+      });
+      this.logger.log(`Created profile for user ${userId}`);
+    }
 
     const storagePath = `${userId}/${Date.now()}.${fileExt}`;
 
@@ -137,7 +172,9 @@ export class DocumentsService {
           });
 
         if (chunkError) {
-          this.logger.error(`Failed to store chunk ${i}: ${chunkError.message}`);
+          this.logger.error(
+            `Failed to store chunk ${i}: ${chunkError.message}`,
+          );
         }
       }
 

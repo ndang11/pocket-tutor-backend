@@ -6,15 +6,18 @@ import * as express from 'express';
 
 async function bootstrap() {
   validateEnv();
+
   const app = await NestFactory.create(AppModule);
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+  // Set global prefix for all routes
+  app.setGlobalPrefix('api');
+
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'apikey', 'Accept', 'Authorization'],
+    methods: 'GET, HEAD, PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
 

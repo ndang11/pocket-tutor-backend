@@ -42,7 +42,9 @@ Provide a clear, educational answer based only on the context above.`;
   }
 
   private async askGemini(prompt: string): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+    const model = this.genAI.getGenerativeModel({
+      model: 'gemini-2.0-flash-lite',
+    });
     const result = await model.generateContent(prompt);
     return result.response.text();
   }
@@ -56,14 +58,37 @@ Provide a clear, educational answer based only on the context above.`;
   }
 
   async ask(documentId: string, userId: string, question: string) {
+    // Add logging at the very beginning
+    this.logger.log(`=== CHAT REQUEST START ===`);
+    this.logger.log(`documentId: "${documentId}"`);
+    this.logger.log(`userId: "${userId}"`);
+    this.logger.log(`question: "${question}"`);
+    this.logger.log(`documentId length: ${documentId?.length}`);
+    this.logger.log(`userId length: ${userId?.length}`);
+    this.logger.log(`question length: ${question?.length}`);
+
     if (!documentId?.trim() || !userId?.trim() || !question?.trim()) {
+      this.logger.error(`Validation failed:`);
+      this.logger.error(`- documentId exists: ${!!documentId}`);
+      this.logger.error(`- documentId trimmed: "${documentId?.trim()}"`);
+      this.logger.error(`- userId exists: ${!!userId}`);
+      this.logger.error(`- userId trimmed: "${userId?.trim()}"`);
+      this.logger.error(`- question exists: ${!!question}`);
+      this.logger.error(`- question trimmed: "${question?.trim()}"`);
       throw new BadRequestException(
         'documentId, userId and question are required',
       );
     }
 
+    // Log that validation passed
+    this.logger.log(`✅ Validation passed`);
+
     this.logger.log(`Embedding question: "${question}"`);
     const questionEmbedding = await this.embedding.embedText(question);
+
+    this.logger.log(`Searching for chunks with:`);
+    this.logger.log(`- documentId: ${documentId}`);
+    this.logger.log(`- userId: ${userId}`);
 
     const { data: chunks, error } = await this.supabase
       .getClient()
@@ -79,7 +104,12 @@ Provide a clear, educational answer based only on the context above.`;
       throw new BadRequestException(`Vector search failed: ${error.message}`);
     }
 
+    this.logger.log(`Found ${chunks?.length || 0} chunks`);
+
     if (!chunks || chunks.length === 0) {
+      this.logger.error(
+        `No chunks found for document ${documentId} and user ${userId}`,
+      );
       throw new BadRequestException(
         'No relevant content found in this document for your question.',
       );
@@ -100,14 +130,20 @@ Provide a clear, educational answer based only on the context above.`;
     try {
       answer = await this.askGroq(prompt);
       modelUsed = 'llama-3.3-70b-versatile (groq)';
-      this.logger.log(`Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`);
+      this.logger.log(
+        `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`,
+      );
     } catch (groqErr) {
-      this.logger.warn(`Groq failed — ${groqErr?.message}, falling back to Gemini...`);
+      this.logger.warn(
+        `Groq failed — ${groqErr?.message}, falling back to Gemini...`,
+      );
 
       try {
         answer = await this.askGemini(prompt);
         modelUsed = 'gemini-2.0-flash-lite';
-        this.logger.log(`Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`);
+        this.logger.log(
+          `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`,
+        );
       } catch (geminiErr) {
         this.logger.error('Both Groq and Gemini failed', geminiErr.message);
         throw new BadRequestException(
@@ -131,7 +167,9 @@ Provide a clear, educational answer based only on the context above.`;
   async getSummary(content: string): Promise<string> {
     const completion = await this.groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: `Summarize these notes:\n\n${content}` }],
+      messages: [
+        { role: 'user', content: `Summarize these notes:\n\n${content}` },
+      ],
     });
     return completion.choices[0].message.content ?? '';
   }
