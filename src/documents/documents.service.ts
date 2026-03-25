@@ -56,11 +56,10 @@ export class DocumentsService {
     );
   }
 
-
   async getByUser(userId: string) {
     return this.prisma.documentation.findMany({
       where: { userId },
-      orderBy: { created_at: 'desc' },  
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -69,20 +68,20 @@ export class DocumentsService {
       .getClient()
       .storage.from('documents')
       .remove([path]);
-  
+
     if (error)
       throw new BadRequestException(`Storage delete failed: ${error.message}`);
- 
+
     const doc = await this.prisma.documentation.findFirst({
       where: { path },
     });
-  
+
     if (!doc) throw new BadRequestException('Document not found');
-  
+
     await this.prisma.documentation.delete({
       where: { id: doc.id },
     });
-  
+
     return { message: 'Document deleted successfully' };
   }
 
