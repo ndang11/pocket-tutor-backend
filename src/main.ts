@@ -14,12 +14,13 @@ async function bootstrap() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-''
+  // Set global prefix for all routes
+  app.setGlobalPrefix('api');
+
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'apikey', 'Accept', 'Authorization'],
-    credentials: true, 
+    methods: 'GET, HEAD, PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
   });
   
   const port = process.env.PORT ?? 3000;
