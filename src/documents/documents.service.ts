@@ -16,7 +16,6 @@ export class DocumentsService {
   ) {}
 
   async onModuleInit() {
-    // Dynamically import pdf-parse when the module initializes
     this.pdfParse = (await import('pdf-parse')).default;
   }
 
@@ -77,6 +76,12 @@ export class DocumentsService {
     });
   
     if (!doc) throw new BadRequestException('Document not found');
+
+    await this.supabase
+    .getClient()
+    .from('document_chunks')
+    .delete()
+    .eq('document_id', doc.id);
   
     await this.prisma.documentation.delete({
       where: { id: doc.id },
@@ -115,9 +120,21 @@ export class DocumentsService {
       `Extracted ${extractedText.length} characters from ${file.originalname}`,
     );
 
+    if (extractedText.trim().length < 100) {
+      await this.supabase
+    .getClient()
+    .storage.from('documents')
+    .remove([storagePath]);
+      throw new BadRequestException(
+        'This PDF appears to be scanned or image-based. Please upload a text-based PDF, DOCX, or TXT file.',
+      );
+    }
+
     const document = await this.prisma.documentation.create({
       data: { title, path: data.path, userId },
     });
+
+   
 
     if (extractedText.trim().length > 0) {
       const chunks = await this.embedding.chunkAndEmbed(extractedText);
