@@ -1,31 +1,60 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+// import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+// import { PrismaClient } from '@prisma/client';
+// import { ConfigService } from '@nestjs/config';
+
+// @Injectable()
+// export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+//   constructor(private configService: ConfigService) {
+//     super();
+//   }
+
+//   async onModuleInit() {
+//     const databaseUrl = this.configService.get('DATABASE_URL');
+//     if (databaseUrl) {
+//       await this.$connect();
+//     }
+//   }
+
+//   async onModuleDestroy() {
+//     await this.$disconnect();
+//   }
+// }
+
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 
 @Injectable()
-export class PrismaService implements OnModuleInit {
-  private client: PrismaClient;
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
+  constructor(private configService: ConfigService) {
+    // 1. Get the URL from ConfigService
+    const connectionString = configService.get<string>('DATABASE_URL');
 
-  constructor() {
-    const adapter = new PrismaPg({
-      connectionString: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-    });
+    if (!connectionString) {
+      throw new Error('DATABASE_URL is not defined in the configuration');
+    }
 
-    this.client = new PrismaClient({ adapter });
+    // 2. Create the PG connection pool
+    const pool = new Pool({ connectionString });
+
+    // 3. Initialize the Driver Adapter
+    const adapter = new PrismaPg(pool);
+
+    // 4. Pass the adapter to the parent PrismaClient constructor
+    super({ adapter });
   }
 
   async onModuleInit() {
-    await this.client.$connect();
+    // Verifies the connection to Supabase/PostgreSQL is alive
+    await this.$connect();
   }
 
-  get documentation() {
-    return this.client.documentation;
-  }
-
-  get profile() {
-    return this.client.profile;
+  async onModuleDestroy() {
+    await this.$disconnect();
   }
 }
