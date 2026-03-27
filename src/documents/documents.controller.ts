@@ -25,7 +25,7 @@ export class DocumentsController {
     FileInterceptor('file', {
       storage: memoryStorage(),
       limits: {
-        fileSize: 20 * 1024 * 1024, // 20MB limit
+        fileSize: 20 * 1024 * 1024,
       },
     }),
   )
@@ -34,19 +34,19 @@ export class DocumentsController {
     @Body('userId') userId: string,
     @Body('title') title: string,
   ) {
-    this.logger.log('=== UPLOAD REQUEST START ===');
-    
-    // Log all incoming data
-    this.logger.log(`Body: ${JSON.stringify({ userId, title })}`);
-    this.logger.log(`File: ${JSON.stringify({
-      originalname: file?.originalname,
-      size: file?.size,
-      mimetype: file?.mimetype,
-      hasBuffer: !!file?.buffer,
-      bufferSize: file?.buffer?.length,
-    })}`);
+    this.logger.log('UPLOAD REQUEST START');
 
-    // Validate inputs
+    this.logger.log(`Body: ${JSON.stringify({ userId, title })}`);
+    this.logger.log(
+      `File: ${JSON.stringify({
+        originalname: file?.originalname,
+        size: file?.size,
+        mimetype: file?.mimetype,
+        hasBuffer: !!file?.buffer,
+        bufferSize: file?.buffer?.length,
+      })}`,
+    );
+
     if (!file) {
       this.logger.error('No file provided');
       throw new BadRequestException('No file uploaded');
@@ -68,7 +68,11 @@ export class DocumentsController {
     }
 
     try {
-      const result = await this.documentsService.uploadAndRecord(file, userId, title);
+      const result = await this.documentsService.uploadAndRecord(
+        file,
+        userId,
+        title,
+      );
       this.logger.log('Upload successful');
       return { message: 'Document processed successfully', data: result };
     } catch (error) {

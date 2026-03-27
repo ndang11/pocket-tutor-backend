@@ -1,12 +1,17 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
-
 import { PdfReader } from 'pdfreader';
+
 @Injectable()
-export class DocumentsService {
+export class DocumentsService implements OnModuleInit {
   private readonly logger = new Logger(DocumentsService.name);
   private pdfParse: any;
 
@@ -30,18 +35,20 @@ export class DocumentsService {
         }
         const data = await this.pdfParse(file.buffer);
         return data.text || '';
-      } catch (error) {
-        return await this.parsePdf(file.buffer);
+      } catch {
+        return this.parsePdfFallback(file.buffer);
       }
     }
 
     if (ext === 'docx') {
       try {
-        const result = await mammoth.extractRawText({ buffer: file.buffer });
+        const result = await mammoth.extractRawText({
+          buffer: file.buffer,
+        });
         return result.value || '';
       } catch (err) {
         const error = err as Error;
-        this.logger.error(`Failed to parse DOCX: ${error.message}`);
+        this.logger.error(`DOCX parse failed: ${error.message}`);
         return '';
       }
     }
@@ -51,25 +58,39 @@ export class DocumentsService {
     }
 
     throw new BadRequestException(
-      'Unsupported file type. Please upload a PDF, DOCX, or TXT file.',
+      'Unsupported file type. Upload PDF, DOCX, or TXT.',
     );
   }
 
+  private async parsePdfFallback(buffer: Buffer): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const textParts: string[] = [];
+
+      new PdfReader().parseBuffer(buffer, (err, item) => {
+        if (err) return reject(new Error(String(err)));
+
+        if (!item) return resolve(textParts.join(' '));
+
+        if (item.text) textParts.push(item.text);
+      });
+    });
+  }
+
   async getByUser(userId: string) {
-    return this.prisma.documentation.findMany({
+    return await this.prisma.documentation.findMany({
       where: { userId },
       orderBy: { created_at: 'desc' },
     });
   }
 
   async deleteByPath(path: string) {
-    const { error } = await this.supabase
-      .getClient()
-      .storage.from('documents')
-      .remove([path]);
+    const client = this.supabase.getClient();
 
-    if (error)
+    const { error } = await client.storage.from('documents').remove([path]);
+
+    if (error) {
       throw new BadRequestException(`Storage delete failed: ${error.message}`);
+    }
 
     const doc = await this.prisma.documentation.findFirst({
       where: { path },
@@ -77,40 +98,13 @@ export class DocumentsService {
 
     if (!doc) throw new BadRequestException('Document not found');
 
-    await this.supabase
-    .getClient()
-    .from('document_chunks')
-    .delete()
-    .eq('document_id', doc.id);
-  
+    await client.from('document_chunks').delete().eq('document_id', doc.id);
+
     await this.prisma.documentation.delete({
       where: { id: doc.id },
     });
 
     return { message: 'Document deleted successfully' };
-  }
-
-  private async parsePdf(buffer: Buffer): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const textParts: string[] = [];
-
-      new PdfReader().parseBuffer(buffer, (err, item) => {
-        if (err) {
-          reject(new Error(String(err)));
-          return;
-        }
-
-        if (!item) {
-          // End of parsing
-          resolve(textParts.join(' '));
-          return;
-        }
-
-        if (item.text) {
-          textParts.push(item.text);
-        }
-      });
-    });
   }
 
   async uploadAndRecord(
@@ -119,14 +113,16 @@ export class DocumentsService {
     title: string,
   ) {
     if (!file?.originalname) throw new BadRequestException('Invalid file');
+
     if (!userId?.trim() || !title?.trim())
-      throw new BadRequestException('userId and title are required');
+      throw new BadRequestException('userId and title required');
 
     const fileExt = file.originalname.split('.').pop()?.toLowerCase();
-    if (!fileExt || fileExt === file.originalname)
-      throw new BadRequestException('Could not determine file extension');
 
-    // Ensure profile exists for this user
+    if (!fileExt || fileExt === file.originalname) {
+      throw new BadRequestException('Invalid file extension');
+    }
+
     let profile = await this.prisma.profile.findUnique({
       where: { id: userId },
     });
@@ -148,62 +144,76 @@ export class DocumentsService {
         upsert: true,
       });
 
-    if (error) throw new BadRequestException(`Storage Error: ${error.message}`);
+    if (error) {
+      throw new BadRequestException(`Storage Error: ${error.message}`);
+    }
 
     const extractedText = await this.extractText(file);
+
     this.logger.log(
-      `Extracted ${extractedText.length} characters from ${file.originalname}`,
+      `Extracted ${extractedText.length} chars from ${file.originalname}`,
     );
 
     if (extractedText.trim().length < 100) {
       await this.supabase
-    .getClient()
-    .storage.from('documents')
-    .remove([storagePath]);
+        .getClient()
+        .storage.from('documents')
+        .remove([storagePath]);
+
       throw new BadRequestException(
-        'This PDF appears to be scanned or image-based. Please upload a text-based PDF, DOCX, or TXT file.',
+        'File appears to be scanned or empty. Upload a text-based file.',
       );
     }
 
     const document = await this.prisma.documentation.create({
-      data: { title, path: data.path, userId },
+      data: {
+        title,
+        path: data.path,
+        userId,
+      },
     });
 
-   
-
-    if (extractedText.trim().length > 0) {
-      const chunks = await this.embedding.chunkAndEmbed(extractedText);
-
-      for (let i = 0; i < chunks.length; i++) {
-        const { chunk, embedding } = chunks[i];
-
-        const { error: chunkError } = await this.supabase
-          .getClient()
-          .from('document_chunks')
-          .insert({
-            document_id: document.id,
-            user_id: userId,
-            chunk_index: i,
-            content: chunk,
-            embedding: JSON.stringify(embedding),
-          });
-
-        if (chunkError) {
-          this.logger.error(
-            `Failed to store chunk ${i}: ${chunkError.message}`,
-          );
-        }
-      }
-
-      this.logger.log(
-        `Stored ${chunks.length} chunks with embeddings for document ${document.id}`,
-      );
-    }
+    this.processEmbeddingsInBackground(
+      document.id,
+      userId,
+      extractedText,
+    ).catch((err) => this.logger.error('Background processing failed', err));
 
     return {
       ...document,
       extractedTextLength: extractedText.length,
       preview: extractedText.slice(0, 200),
+      message: 'Processing started',
     };
+  }
+
+  private async processEmbeddingsInBackground(
+    docId: string,
+    userId: string,
+    text: string,
+  ) {
+    const client = this.supabase.getClient();
+
+    try {
+      const chunks = await this.embedding.chunkAndEmbed(text);
+
+      const payload = chunks.map((c, i) => ({
+        document_id: docId,
+        user_id: userId,
+        chunk_index: i,
+        content: c.chunk,
+        embedding: JSON.stringify(c.embedding),
+      }));
+
+      const { error } = await client.from('document_chunks').insert(payload);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      this.logger.log(`Processed ${payload.length} chunks for doc ${docId}`);
+    } catch (err) {
+      this.logger.error(`Embedding processing failed for ${docId}`, err);
+    }
   }
 }

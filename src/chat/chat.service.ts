@@ -81,7 +81,7 @@ Provide a clear, educational answer based only on the context above.`;
     }
 
     // Log that validation passed
-    this.logger.log(`✅ Validation passed`);
+    this.logger.log(`Validation passed`);
 
     this.logger.log(`Embedding question: "${question}"`);
     const questionEmbedding = await this.embedding.embedText(question);
