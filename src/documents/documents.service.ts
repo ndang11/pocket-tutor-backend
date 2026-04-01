@@ -9,11 +9,22 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
 import { PdfReader } from 'pdfreader';
+import PDFParser from 'pdf2json';
 
 @Injectable()
 export class DocumentsService implements OnModuleInit {
   private readonly logger = new Logger(DocumentsService.name);
   private pdfParse: any;
+  private readonly supportedImageExtensions = new Set([
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'bmp',
+    'heic',
+    'heif',
+  ]);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -25,19 +36,182 @@ export class DocumentsService implements OnModuleInit {
     this.pdfParse = (await import('pdf-parse')).default;
   }
 
+  private async extractTextWithGeminiVision(
+    buffer: Buffer,
+    mimeType: string,
+    prompt: string,
+  ): Promise<string> {
+    try {
+      const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-2.0-flash-lite',
+      });
+
+      const base64 = buffer.toString('base64');
+
+      const result = await model.generateContent([
+        {
+          inlineData: {
+            mimeType,
+            data: base64,
+          },
+        },
+        {
+          text: prompt,
+        },
+      ]);
+
+      const text = result.response.text();
+      this.logger.log(`Gemini Vision extracted ${text.length} chars`);
+      return this.normalizeExtractedText(text);
+    } catch (err) {
+      const error = err as Error;
+      this.logger.warn(`Gemini Vision OCR failed: ${error.message}`);
+      return '';
+    }
+  }
+
+  private async extractImageText(file: Express.Multer.File): Promise<string> {
+    const mimeType = file.mimetype || this.getImageMimeType(file.originalname);
+
+    return this.extractTextWithGeminiVision(
+      file.buffer,
+      mimeType,
+      'Extract all readable text from this image of study notes. Preserve headings, bullets, equations, and short line breaks where possible. Return only the raw text with no commentary.',
+    );
+  }
+
+  private async extractEpubText(file: Express.Multer.File): Promise<string> {
+    try {
+      const JSZipModule = await import('jszip');
+      const JSZip = JSZipModule.default;
+      const xml2js = await import('xml2js');
+
+      const zip = await JSZip.loadAsync(file.buffer);
+      const containerEntry = zip.file('META-INF/container.xml');
+
+      if (!containerEntry) {
+        throw new Error('EPUB container.xml not found');
+      }
+
+      const containerXml = await containerEntry.async('text');
+      const container = await xml2js.parseStringPromise(containerXml);
+      const rootfilePath =
+        container?.container?.rootfiles?.[0]?.rootfile?.[0]?.$?.['full-path'];
+
+      if (!rootfilePath || typeof rootfilePath !== 'string') {
+        throw new Error('EPUB package document path not found');
+      }
+
+      const packageEntry = zip.file(rootfilePath);
+      if (!packageEntry) {
+        throw new Error('EPUB package document missing');
+      }
+
+      const packageXml = await packageEntry.async('text');
+      const packageDoc = await xml2js.parseStringPromise(packageXml);
+      const packageDir = this.getDirectoryName(rootfilePath);
+
+      const manifestItems =
+        packageDoc?.package?.manifest?.[0]?.item?.map((item: any) => ({
+          id: item?.$?.id as string | undefined,
+          href: item?.$?.href as string | undefined,
+          mediaType: item?.$?.['media-type'] as string | undefined,
+        })) || [];
+
+      const manifestById = new Map(
+        manifestItems
+          .filter((item: { id?: string }) => !!item.id)
+          .map((item: { id?: string; href?: string; mediaType?: string }) => [
+            item.id as string,
+            item,
+          ]),
+      );
+
+      const spineRefs =
+        packageDoc?.package?.spine?.[0]?.itemref?.map(
+          (itemref: any) => itemref?.$?.idref as string | undefined,
+        ) || [];
+
+      const chapterPaths = spineRefs
+        .map((idref: string | undefined) =>
+          idref ? manifestById.get(idref) : undefined,
+        )
+        .filter(
+          (
+            item:
+              | {
+                  href?: string;
+                  mediaType?: string;
+                }
+              | undefined,
+          ) =>
+            !!item?.href &&
+            [
+              'application/xhtml+xml',
+              'text/html',
+              'application/xml',
+              'text/xml',
+            ].includes(item.mediaType || ''),
+        )
+        .map((item: { href?: string }) =>
+          this.resolveZipPath(packageDir, item.href as string),
+        );
+
+      const chapterTexts: string[] = [];
+
+      for (const chapterPath of chapterPaths) {
+        const chapterEntry = zip.file(chapterPath);
+        if (!chapterEntry) {
+          continue;
+        }
+
+        const chapterContent = await chapterEntry.async('text');
+        const cleaned = this.extractTextFromMarkup(chapterContent);
+
+        if (cleaned) {
+          chapterTexts.push(cleaned);
+        }
+      }
+
+      if (!chapterTexts.length) {
+        const fallbackTexts: string[] = [];
+
+        for (const fileName of Object.keys(zip.files)) {
+          if (!/\.(xhtml|html|htm)$/i.test(fileName)) {
+            continue;
+          }
+
+          const entry = zip.file(fileName);
+          if (!entry) {
+            continue;
+          }
+
+          const content = await entry.async('text');
+          const cleaned = this.extractTextFromMarkup(content);
+
+          if (cleaned) {
+            fallbackTexts.push(cleaned);
+          }
+        }
+
+        return this.normalizeExtractedText(fallbackTexts.join('\n\n'));
+      }
+
+      return this.normalizeExtractedText(chapterTexts.join('\n\n'));
+    } catch (err) {
+      const error = err as Error;
+      this.logger.error(`EPUB parse failed: ${error.message}`);
+      return '';
+    }
+  }
+
   private async extractText(file: Express.Multer.File): Promise<string> {
     const ext = file.originalname.split('.').pop()?.toLowerCase();
 
     if (ext === 'pdf') {
-      try {
-        if (!this.pdfParse) {
-          this.pdfParse = (await import('pdf-parse')).default;
-        }
-        const data = await this.pdfParse(file.buffer);
-        return data.text || '';
-      } catch {
-        return this.parsePdfFallback(file.buffer);
-      }
+      return this.extractPdfText(file.buffer, file.originalname);
     }
 
     if (ext === 'docx') {
@@ -45,7 +219,7 @@ export class DocumentsService implements OnModuleInit {
         const result = await mammoth.extractRawText({
           buffer: file.buffer,
         });
-        return result.value || '';
+        return this.normalizeExtractedText(result.value || '');
       } catch (err) {
         const error = err as Error;
         this.logger.error(`DOCX parse failed: ${error.message}`);
@@ -54,26 +228,259 @@ export class DocumentsService implements OnModuleInit {
     }
 
     if (ext === 'txt') {
-      return file.buffer.toString('utf-8');
+      return this.normalizeExtractedText(file.buffer.toString('utf-8'));
+    }
+
+    if (ext === 'epub') {
+      return this.extractEpubText(file);
+    }
+
+    if (ext && this.supportedImageExtensions.has(ext)) {
+      return this.extractImageText(file);
     }
 
     throw new BadRequestException(
-      'Unsupported file type. Upload PDF, DOCX, or TXT.',
+      'Unsupported file type. Upload PDF, DOCX, TXT, EPUB, or an image file such as JPG, PNG, WEBP, HEIC.',
     );
   }
 
+  private async extractPdfText(
+    buffer: Buffer,
+    originalName: string,
+  ): Promise<string> {
+    const attempts: Array<{ source: string; text: string }> = [];
+
+    const pdfParseText = await this.tryPdfParse(buffer);
+    if (pdfParseText) {
+      attempts.push({ source: 'pdf-parse', text: pdfParseText });
+    }
+
+    const pdfReaderText = await this.parsePdfFallback(buffer);
+    if (pdfReaderText) {
+      attempts.push({ source: 'pdfreader', text: pdfReaderText });
+    }
+
+    const pdf2JsonText = await this.parsePdfWithPdf2Json(buffer);
+    if (pdf2JsonText) {
+      attempts.push({ source: 'pdf2json', text: pdf2JsonText });
+    }
+
+    const best = this.selectBestPdfExtraction(attempts);
+
+    if (best && best.text.length >= 100) {
+      this.logger.log(
+        `PDF extraction selected ${best.source} for ${originalName} (${best.text.length} chars)`,
+      );
+      return best.text;
+    }
+
+    this.logger.log(
+      `Standard extraction failed for ${originalName}, trying OCR...`,
+    );
+    const ocrText = await this.extractTextWithGeminiVision(
+      buffer,
+      'application/pdf',
+      'Extract all the text content from this PDF document. Return only the raw text, no formatting, no commentary.',
+    );
+
+    if (ocrText && ocrText.length >= 50) {
+      this.logger.log(
+        `OCR extracted ${ocrText.length} chars from ${originalName}`,
+      );
+      return ocrText;
+    }
+
+    throw new BadRequestException(
+      'I tried my best to read this document, but it appears to be image-based and my vision is currently at its limit. ' +
+        'Please try uploading a text-based PDF, DOCX, or TXT file instead.',
+    );
+  }
+
+  private async tryPdfParse(buffer: Buffer): Promise<string> {
+    try {
+      if (!this.pdfParse) {
+        this.pdfParse = (await import('pdf-parse')).default;
+      }
+      const data = await this.pdfParse(buffer);
+      return this.normalizeExtractedText(data.text || '');
+    } catch (err) {
+      const error = err as Error;
+      this.logger.warn(`pdf-parse failed: ${error.message}`);
+      return '';
+    }
+  }
+
   private async parsePdfFallback(buffer: Buffer): Promise<string> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const textParts: string[] = [];
 
       new PdfReader().parseBuffer(buffer, (err, item) => {
-        if (err) return reject(new Error(String(err)));
+        if (err) {
+          this.logger.warn(`pdfreader failed: ${String(err)}`);
+          return resolve('');
+        }
 
-        if (!item) return resolve(textParts.join(' '));
+        if (!item) {
+          return resolve(this.normalizeExtractedText(textParts.join(' ')));
+        }
 
         if (item.text) textParts.push(item.text);
       });
     });
+  }
+
+  private async parsePdfWithPdf2Json(buffer: Buffer): Promise<string> {
+    return new Promise((resolve) => {
+      const parser = new PDFParser();
+
+      parser.on(
+        'pdfParser_dataError',
+        (errData: Error | { parserError: Error }) => {
+          const message =
+            errData instanceof Error
+              ? errData.message
+              : errData?.parserError?.message || 'Unknown error';
+
+          this.logger.warn(`pdf2json failed: ${message}`);
+          resolve('');
+        },
+      );
+
+      parser.on('pdfParser_dataReady', (pdfData: any) => {
+        try {
+          const pages = Array.isArray(pdfData?.Pages) ? pdfData.Pages : [];
+          const text = pages
+            .map((page: any) => {
+              const texts = Array.isArray(page?.Texts) ? page.Texts : [];
+              return texts
+                .map((entry: any) =>
+                  Array.isArray(entry?.R)
+                    ? entry.R.map((part: any) =>
+                        decodeURIComponent(part?.T || ''),
+                      ).join('')
+                    : '',
+                )
+                .filter(Boolean)
+                .join(' ');
+            })
+            .join('\n\n');
+
+          resolve(this.normalizeExtractedText(text));
+        } catch (err) {
+          const error = err as Error;
+          this.logger.warn(`pdf2json processing failed: ${error.message}`);
+          resolve('');
+        }
+      });
+
+      parser.parseBuffer(buffer);
+    });
+  }
+
+  private extractTextFromMarkup(markup: string): string {
+    return this.normalizeExtractedText(
+      markup
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6|tr)>/gi, '\n')
+        .replace(/<li[^>]*>/gi, '\n• ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&/gi, '&')
+        .replace(/</gi, '<')
+        .replace(/>/gi, '>')
+        .replace(/"/gi, '"')
+        .replace(/'/gi, "'"),
+    );
+  }
+
+  private getDirectoryName(filePath: string): string {
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    const lastSlashIndex = normalizedPath.lastIndexOf('/');
+
+    if (lastSlashIndex === -1) {
+      return '';
+    }
+
+    return normalizedPath.slice(0, lastSlashIndex + 1);
+  }
+
+  private resolveZipPath(baseDir: string, relativePath: string): string {
+    const segments = `${baseDir}${relativePath}`.split('/');
+    const resolved: string[] = [];
+
+    for (const segment of segments) {
+      if (!segment || segment === '.') {
+        continue;
+      }
+
+      if (segment === '..') {
+        resolved.pop();
+        continue;
+      }
+
+      resolved.push(segment);
+    }
+
+    return resolved.join('/');
+  }
+
+  private getImageMimeType(fileName: string): string {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
+      case 'bmp':
+        return 'image/bmp';
+      case 'heic':
+        return 'image/heic';
+      case 'heif':
+        return 'image/heif';
+      default:
+        return 'image/jpeg';
+    }
+  }
+
+  private selectBestPdfExtraction(
+    attempts: Array<{ source: string; text: string }>,
+  ): { source: string; text: string } | null {
+    if (!attempts.length) {
+      return null;
+    }
+
+    return attempts.sort(
+      (a, b) =>
+        this.scoreExtractedText(b.text) - this.scoreExtractedText(a.text),
+    )[0];
+  }
+
+  private scoreExtractedText(text: string): number {
+    const normalized = this.normalizeExtractedText(text);
+    const words = normalized.split(/\s+/).filter(Boolean);
+    const uniqueWords = new Set(words.map((word) => word.toLowerCase()));
+    const alphanumericChars = (normalized.match(/[A-Za-z0-9]/g) || []).length;
+
+    return normalized.length + uniqueWords.size * 2 + alphanumericChars;
+  }
+
+  private normalizeExtractedText(text: string): string {
+    return text
+      .split('\0')
+      .join(' ')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
   async getByUser(userId: string) {
@@ -161,7 +568,7 @@ export class DocumentsService implements OnModuleInit {
         .remove([storagePath]);
 
       throw new BadRequestException(
-        'File appears to be scanned or empty. Upload a text-based file.',
+        'This file appears to contain little or no extractable text. If it is a scanned or image-heavy file, try a clearer image or document. Supported formats: PDF, DOCX, TXT, EPUB, JPG, PNG, WEBP, HEIC.',
       );
     }
 
