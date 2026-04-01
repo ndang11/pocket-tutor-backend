@@ -27,10 +27,27 @@ export class ChatService {
   }
 
   private buildPrompt(context: string, question: string): string {
-    return `You are Pocket Tutor, a strict pedagogical AI assistant.
-You must only answer using the document context provided below.
-If the question cannot be answered from the context, respond with:
+    return `You are Pocket Tutor, a friendly and careful tutoring assistant.
+
+You must follow these rules:
+1. Use only the uploaded document context below.
+2. Do not add outside facts, assumptions, or prior knowledge.
+3. If the answer is not clearly supported by the context, reply exactly:
 "I can only help with what is in your uploaded document."
+4. Teach like a supportive tutor: be encouraging, simple, and precise.
+5. Start with a short plain-English explanation first.
+6. Then use Bloom-style scaffolding when the context allows:
+   - Remember: identify the key fact, term, or idea from the document
+   - Understand: explain what it means in simple words
+   - Apply: give one short example, analogy, or use-case grounded in the document
+7. Include at least one concrete example or analogy when the document gives enough material.
+8. If the document context is partial, say so briefly instead of guessing.
+
+Use this response style:
+- Simple answer:
+- Remember:
+- Understand:
+- Apply:
 
 DOCUMENT CONTEXT:
 ${context}
@@ -38,7 +55,111 @@ ${context}
 STUDENT QUESTION:
 ${question}
 
-Provide a clear, educational answer based only on the context above.`;
+Answer using only the document context.`;
+  }
+
+  private normalizeText(value: string): string {
+    return value.toLowerCase().replace(/[^\w\s]/g, ' ');
+  }
+
+  private getQuestionKeywords(question: string): string[] {
+    const stopWords = new Set([
+      'a',
+      'an',
+      'and',
+      'are',
+      'as',
+      'at',
+      'be',
+      'by',
+      'do',
+      'does',
+      'for',
+      'from',
+      'how',
+      'i',
+      'in',
+      'is',
+      'it',
+      'of',
+      'on',
+      'or',
+      'that',
+      'the',
+      'this',
+      'to',
+      'was',
+      'what',
+      'when',
+      'where',
+      'which',
+      'who',
+      'why',
+      'with',
+      'you',
+      'your',
+    ]);
+
+    const uniqueKeywords = new Set(
+      this.normalizeText(question)
+        .split(/\s+/)
+        .map((word) => word.trim())
+        .filter((word) => word.length > 2 && !stopWords.has(word)),
+    );
+
+    return Array.from(uniqueKeywords);
+  }
+
+  private scoreChunkRelevance(
+    chunk: any,
+    keywords: string[],
+    index: number,
+  ): number {
+    const content = String(chunk?.content ?? '');
+    const normalizedContent = this.normalizeText(content);
+
+    let keywordHits = 0;
+    for (const keyword of keywords) {
+      if (normalizedContent.includes(keyword)) {
+        keywordHits += 1;
+      }
+    }
+
+    const exactQuestionBoost =
+      keywords.length > 0 ? keywordHits / keywords.length : 0;
+
+    const similarityScore = Number(chunk?.similarity ?? chunk?.score ?? 0);
+    const recencyPenalty = index * 0.01;
+
+    return similarityScore + exactQuestionBoost * 0.35 - recencyPenalty;
+  }
+
+  private rerankChunks(chunks: any[], question: string): any[] {
+    const keywords = this.getQuestionKeywords(question);
+
+    return [...chunks]
+      .map((chunk, index) => ({
+        chunk,
+        score: this.scoreChunkRelevance(chunk, keywords, index),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.chunk);
+  }
+
+  private formatContext(chunks: any[]): string {
+    return chunks
+      .map((chunk: any, index: number) => {
+        const similarity = Number(chunk?.similarity ?? chunk?.score ?? 0);
+        const similarityLabel = Number.isFinite(similarity)
+          ? similarity.toFixed(3)
+          : 'n/a';
+
+        return [
+          `[Source ${index + 1} | chunkIndex: ${chunk.chunk_index ?? 'unknown'} | similarity: ${similarityLabel}]`,
+          chunk.content,
+        ].join('\n');
+      })
+      .join('\n\n');
   }
 
   private async askGemini(prompt: string): Promise<string> {
@@ -58,7 +179,6 @@ Provide a clear, educational answer based only on the context above.`;
   }
 
   async ask(documentId: string, userId: string, question: string) {
-    // Add logging at the very beginning
     this.logger.log(`=== CHAT REQUEST START ===`);
     this.logger.log(`documentId: "${documentId}"`);
     this.logger.log(`userId: "${userId}"`);
@@ -80,7 +200,6 @@ Provide a clear, educational answer based only on the context above.`;
       );
     }
 
-    // Log that validation passed
     this.logger.log(`Validation passed`);
 
     this.logger.log(`Embedding question: "${question}"`);
@@ -90,13 +209,14 @@ Provide a clear, educational answer based only on the context above.`;
     this.logger.log(`- documentId: ${documentId}`);
     this.logger.log(`- userId: ${userId}`);
 
+    const matchCount = 12;
     const { data: chunks, error } = await this.supabase
       .getClient()
       .rpc('match_document_chunks', {
         query_embedding: questionEmbedding,
         match_document_id: documentId,
         match_user_id: userId,
-        match_count: 5,
+        match_count: matchCount,
       });
 
     if (error) {
@@ -115,23 +235,23 @@ Provide a clear, educational answer based only on the context above.`;
       );
     }
 
-    this.logger.log(`Retrieved ${chunks.length} relevant chunks`);
+    const rerankedChunks = this.rerankChunks(chunks, question).slice(0, 8);
 
-    const context = chunks
-      .map((c: any, i: number) => `[Section ${i + 1}]:\n${c.content}`)
-      .join('\n\n');
+    this.logger.log(
+      `Retrieved ${chunks.length} relevant chunks, using top ${rerankedChunks.length} after reranking`,
+    );
 
+    const context = this.formatContext(rerankedChunks);
     const prompt = this.buildPrompt(context, question);
 
     let answer: string;
     let modelUsed: string;
 
-    // ── Groq is primary. If it fails, Gemini is the fallback. ────────
     try {
       answer = await this.askGroq(prompt);
       modelUsed = 'llama-3.3-70b-versatile (groq)';
       this.logger.log(
-        `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`,
+        `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${rerankedChunks.length}`,
       );
     } catch (groqErr) {
       this.logger.warn(
@@ -142,7 +262,7 @@ Provide a clear, educational answer based only on the context above.`;
         answer = await this.askGemini(prompt);
         modelUsed = 'gemini-2.0-flash-lite';
         this.logger.log(
-          `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${chunks.length}`,
+          `Model used: ${modelUsed} | Document: ${documentId} | Chunks: ${rerankedChunks.length}`,
         );
       } catch (geminiErr) {
         this.logger.error('Both Groq and Gemini failed', geminiErr.message);
@@ -156,8 +276,8 @@ Provide a clear, educational answer based only on the context above.`;
       question,
       answer,
       modelUsed,
-      sourcesUsed: chunks.length,
-      sources: chunks.map((c: any) => ({
+      sourcesUsed: rerankedChunks.length,
+      sources: rerankedChunks.map((c: any) => ({
         chunkIndex: c.chunk_index,
         preview: c.content.slice(0, 100),
       })),

@@ -8,6 +8,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { EmbeddingModule } from './embedding/embedding.module';
 import { ChatModule } from './chat/chat.module';
 import { QuizModule } from './quiz/quiz.module';
+import { FlashcardModule } from './flashcard/flashcard.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { QuizModule } from './quiz/quiz.module';
       envFilePath: '.env',
     }),
     QuizModule,
+    FlashcardModule,
   ],
   controllers: [AppController],
   providers: [AppService],
