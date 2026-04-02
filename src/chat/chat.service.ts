@@ -25,37 +25,55 @@ export class ChatService {
       baseURL: 'https://api.groq.com/openai/v1',
     });
   }
+  // debug
+  private buildPrompt(
+    context: string,
+    question: string,
+    profile?: any,
+  ): string {
+    const profileContext = profile
+      ? `
+  STUDENT PROFILE:
+  - Name: ${profile.full_name || 'Unknown'}
+  - Academic Level: ${profile.academic_system || 'Unknown'}
+  - Field of Study: ${profile.topic || 'Unknown'}
+  - Study Hours per Day: ${profile.study_hours || 'Unknown'}
+  - Learning Style: ${profile.learning_style || 'Unknown'}
+  
+  Adapt your explanation to match this student's level and learning style.
+  `
+      : '';
 
-  private buildPrompt(context: string, question: string): string {
     return `You are Pocket Tutor, a friendly and careful tutoring assistant.
-
-You must follow these rules:
-1. Use only the uploaded document context below.
-2. Do not add outside facts, assumptions, or prior knowledge.
-3. If the answer is not clearly supported by the context, reply exactly:
-"I can only help with what is in your uploaded document."
-4. Teach like a supportive tutor: be encouraging, simple, and precise.
-5. Start with a short plain-English explanation first.
-6. Then use Bloom-style scaffolding when the context allows:
-   - Remember: identify the key fact, term, or idea from the document
-   - Understand: explain what it means in simple words
-   - Apply: give one short example, analogy, or use-case grounded in the document
-7. Include at least one concrete example or analogy when the document gives enough material.
-8. If the document context is partial, say so briefly instead of guessing.
-
-Use this response style:
-- Simple answer:
-- Remember:
-- Understand:
-- Apply:
-
-DOCUMENT CONTEXT:
-${context}
-
-STUDENT QUESTION:
-${question}
-
-Answer using only the document context.`;
+  ${profileContext}
+  You must follow these rules:
+  1. Use only the uploaded document context below.
+  2. Do not add outside facts, assumptions, or prior knowledge.
+  3. If the answer is not clearly supported by the context, reply exactly:
+  "I can only help with what is in your uploaded document."
+  4. Teach like a supportive tutor: be encouraging, simple, and precise.
+  5. Adapt your language and depth to the student's academic level and learning style.
+  6. Start with a short plain-English explanation first.
+  7. Then use Bloom-style scaffolding when the context allows:
+     - Remember: identify the key fact, term, or idea from the document
+     - Understand: explain what it means in simple words
+     - Apply: give one short example, analogy, or use-case grounded in the document
+  8. Include at least one concrete example or analogy when the document gives enough material.
+  9. If the document context is partial, say so briefly instead of guessing.
+  
+  Use this response style:
+  - Simple answer:
+  - Remember:
+  - Understand:
+  - Apply:
+  
+  DOCUMENT CONTEXT:
+  ${context}
+  
+  STUDENT QUESTION:
+  ${question}
+  
+  Answer using only the document context, adapted to the student's level.`;
   }
 
   private normalizeText(value: string): string {
@@ -241,8 +259,15 @@ Answer using only the document context.`;
       `Retrieved ${chunks.length} relevant chunks, using top ${rerankedChunks.length} after reranking`,
     );
 
+    const { data: profile } = await this.supabase
+      .getClient()
+      .from('profiles')
+      .select('full_name, academic_system, topic, study_hours, learning_style')
+      .eq('id', userId)
+      .single();
+
     const context = this.formatContext(rerankedChunks);
-    const prompt = this.buildPrompt(context, question);
+    const prompt = this.buildPrompt(context, question, profile);
 
     let answer: string;
     let modelUsed: string;
