@@ -8,14 +8,47 @@ export class FlashcardController {
 
   @Post('generate')
   async generate(@Body() body: { documentId: string; userId: string }) {
-    return this.flashcardsService.generateForDocument(
-      body.documentId,
-      body.userId,
-    );
+    console.log('[FlashcardController] generate called:', body);
+    try {
+      const result = await this.flashcardsService.generateForDocument(
+        body.documentId,
+        body.userId,
+      );
+      console.log(
+        '[FlashcardController] generate result:',
+        result?.length,
+        'cards',
+      );
+
+      // Fetch the saved flashcards with their IDs
+      const savedCards = await this.flashcardsService.getByDocument(
+        body.documentId,
+      );
+      console.log(
+        '[FlashcardController] returning saved cards:',
+        savedCards?.length,
+      );
+
+      return { flashcards: savedCards };
+    } catch (err) {
+      console.error('[FlashcardController] generate error:', err);
+      throw err;
+    }
+  }
+
+  @Get('user/:userId')
+  async getByUser(@Param('userId') userId: string) {
+    console.log('[FlashcardController] getByUser called with userId:', userId);
+    const flashcards = await this.flashcardsService.getByUser(userId);
+    console.log('[FlashcardController] getByUser result:', {
+      count: flashcards?.length,
+    });
+    return { flashcards: flashcards || [] };
   }
 
   @Get(':documentId')
-  get(@Param('documentId') documentId: string) {
-    return this.flashcardsService.getByDocument(documentId);
+  async get(@Param('documentId') documentId: string) {
+    const flashcards = await this.flashcardsService.getByDocument(documentId);
+    return { flashcards: flashcards || [] };
   }
 }
