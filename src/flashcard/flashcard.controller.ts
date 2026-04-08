@@ -26,10 +26,10 @@ export class FlashcardController {
       );
       console.log(
         '[FlashcardController] returning saved cards:',
-        savedCards?.length,
+        savedCards?.rows?.length,
       );
 
-      return { flashcards: savedCards };
+      return { flashcards: savedCards?.rows || [] };
     } catch (err) {
       console.error('[FlashcardController] generate error:', err);
       throw err;
@@ -41,14 +41,14 @@ export class FlashcardController {
     console.log('[FlashcardController] getByUser called with userId:', userId);
     const flashcards = await this.flashcardsService.getByUser(userId);
     console.log('[FlashcardController] getByUser result:', {
-      count: flashcards?.length,
+      count: flashcards?.rows?.length,
     });
-    return { flashcards: flashcards || [] };
+    return { flashcards: flashcards?.rows || [] };
   }
 
   @Get(':documentId')
   async get(@Param('documentId') documentId: string) {
     const flashcards = await this.flashcardsService.getByDocument(documentId);
-    return { flashcards: flashcards || [] };
+    return { flashcards: flashcards?.rows || [] };
   }
 }

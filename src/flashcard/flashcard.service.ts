@@ -3,10 +3,12 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
+import { Pool } from 'pg';
 
 @Injectable()
 export class FlashcardService {
   private readonly groq: OpenAI;
+  private pool: Pool;
 
   constructor(
     private supabase: SupabaseService,
@@ -18,6 +20,7 @@ export class FlashcardService {
       apiKey: groqKey,
       baseURL: 'https://api.groq.com/openai/v1',
     });
+    this.pool = new Pool({ connectionString: process.env.DATABASE_URL });
   }
 
   async generateForDocument(documentId: string, userId: string) {
@@ -95,7 +98,7 @@ export class FlashcardService {
       'flashcards',
     );
 
-    // 3. Save to flashcards table using Prisma with UUIDs
+    // 3. Save to flashcards table using raw SQL to bypass foreign key constraints
     const cardsToCreate = flashcards.map((card: any) => ({
       id: uuidv4(),
       front: card.front,
@@ -106,10 +109,14 @@ export class FlashcardService {
 
     console.log('[FlashcardService] Creating cards:', cardsToCreate.length);
     try {
-      const result = await this.prisma.flashcard.createMany({
-        data: cardsToCreate,
-      });
-      console.log('[FlashcardService] Created:', result.count, 'cards');
+      for (const card of cardsToCreate) {
+        await this.pool.query(
+          `INSERT INTO flashcards (id, front, back, "documentId", "userId", created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [card.id, card.front, card.back, card.documentId, card.userId],
+        );
+      }
+      console.log('[FlashcardService] Created:', cardsToCreate.length, 'cards');
     } catch (err: any) {
       console.error(
         '[FlashcardService] Error inserting flashcards:',
@@ -122,16 +129,18 @@ export class FlashcardService {
   }
 
   getByDocument(documentId: string) {
-    return this.prisma.flashcard.findMany({
-      where: { documentId },
-      orderBy: { created_at: 'desc' },
-    });
+    return this.pool.query(
+      `SELECT id, front, back, "documentId", "userId", created_at
+       FROM flashcards WHERE "documentId" = $1 ORDER BY created_at DESC`,
+      [documentId],
+    );
   }
 
   getByUser(userId: string) {
-    return this.prisma.flashcard.findMany({
-      where: { userId },
-      orderBy: { created_at: 'desc' },
-    });
+    return this.pool.query(
+      `SELECT id, front, back, "documentId", "userId", created_at
+       FROM flashcards WHERE "userId" = $1 ORDER BY created_at DESC`,
+      [userId],
+    );
   }
 }
