@@ -10,7 +10,7 @@ import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
 import { PdfReader } from 'pdfreader';
 import PDFParser from 'pdf2json';
-
+import * as pdfConvert from 'pdf-img-convert';
 @Injectable()
 export class DocumentsService implements OnModuleInit {
   private readonly logger = new Logger(DocumentsService.name);
@@ -34,6 +34,53 @@ export class DocumentsService implements OnModuleInit {
 
   async onModuleInit() {
     this.pdfParse = (await import('pdf-parse')).default;
+  }
+
+  private async extractTextFromPdfImages(buffer: Buffer): Promise<string> {
+    try {
+      this.logger.log('Converting PDF pages to images for OCR...');
+
+      const pgs = await pdfConvert.convert(buffer, {
+        page_numbers: [1, 2, 3, 4, 5],
+        width: 1200,
+        base64: true,
+      });
+
+      const pageImages = pgs as string[];
+      let fullText = '';
+
+      for (let i = 0; i < pageImages.length; i++) {
+        this.logger.log(`OCR processing page ${i + 1}/${pageImages.length}`);
+
+        const pageText = await this.runGeminiVisionOnBase64(
+          pageImages[i],
+          'image/png',
+          'Extract all text from this page. Preserve formatting and equations.',
+        );
+        fullText += `\n\n--- Page ${i + 1} ---\n\n${pageText}`;
+      }
+
+      return fullText;
+    } catch (err) {
+      this.logger.error(`PDF-to-Image OCR failed: ${err.message}`);
+      return '';
+    }
+  }
+
+  private async runGeminiVisionOnBase64(
+    base64: string,
+    mimeType: string,
+    prompt: string,
+  ): Promise<string> {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+
+    const result = await model.generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      { text: prompt },
+    ]);
+    return result.response.text();
   }
 
   private async extractTextWithGeminiVision(
@@ -277,11 +324,19 @@ export class DocumentsService implements OnModuleInit {
     this.logger.log(
       `Standard extraction failed for ${originalName}, trying OCR...`,
     );
-    const ocrText = await this.extractTextWithGeminiVision(
-      buffer,
-      'application/pdf',
-      'Extract all the text content from this PDF document. Return only the raw text, no formatting, no commentary.',
+
+    this.logger.log(
+      `Standard extraction failed for ${originalName}, converting to images for OCR...`,
     );
+
+    const ocrText = await this.extractTextFromPdfImages(buffer);
+
+    if (ocrText && ocrText.length >= 50) {
+      this.logger.log(
+        `Image-based OCR extracted ${ocrText.length} chars from ${originalName}`,
+      );
+      return ocrText;
+    }
 
     if (ocrText && ocrText.length >= 50) {
       this.logger.log(
