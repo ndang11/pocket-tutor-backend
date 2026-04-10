@@ -18,9 +18,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "prepare": "husky",
+    "prepare": "echo 'prepare script disabled'",
     "db:generate": "prisma generate",
-    "postinstall": "prisma generate"
+    "postinstall": "echo 'postinstall'"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.47",
