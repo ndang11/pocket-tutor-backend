@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { PrismaService } from '../../prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 import { Pool } from 'pg';
@@ -10,10 +9,7 @@ export class FlashcardService {
   private readonly groq: OpenAI;
   private pool: Pool;
 
-  constructor(
-    private supabase: SupabaseService,
-    private prisma: PrismaService,
-  ) {
+  constructor(private supabase: SupabaseService) {
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) throw new Error('Missing GROQ_API_KEY');
     this.groq = new OpenAI({
