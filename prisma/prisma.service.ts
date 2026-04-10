@@ -4,53 +4,59 @@ import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import 'dotenv/config';
 
-const pool = new Pool({ 
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-const adapter = new PrismaPg(pool);
-const prismaClient = new PrismaClient(adapter);
-
 @Injectable()
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
+  private pool: Pool;
+  private prismaClient: PrismaClient;
+
   async onModuleInit() {
     try {
-      await prismaClient.$connect();
+      this.pool = new Pool({ 
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+      });
+      const adapter = new PrismaPg(this.pool);
+      this.prismaClient = new PrismaClient({ adapter });
+      await this.prismaClient.$connect();
     } catch (e) {
       console.error('Failed to connect to database:', e);
     }
   }
 
   async onModuleDestroy() {
-    await prismaClient.$disconnect();
-    pool.end();
+    if (this.prismaClient) {
+      await this.prismaClient.$disconnect();
+    }
+    if (this.pool) {
+      this.pool.end();
+    }
   }
 
   get profile() {
-    return prismaClient.profile;
+    return this.prismaClient.profile;
   }
 
   get documentation() {
-    return prismaClient.documentation;
+    return this.prismaClient.documentation;
   }
 
   get document_chunks() {
-    return prismaClient.document_chunks;
+    return this.prismaClient.document_chunks;
   }
 
   get flashcard() {
-    return prismaClient.flashcard;
+    return this.prismaClient.flashcard;
   }
 
   get $connect() {
-    return prismaClient.$connect;
+    return this.prismaClient.$connect;
   }
 
   get $disconnect() {
-    return prismaClient.$disconnect;
+    return this.prismaClient.$disconnect;
   }
 
   get $transaction() {
-    return prismaClient.$transaction;
+    return this.prismaClient.$transaction;
   }
 }
