@@ -6,7 +6,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "build": "npx prisma generate && npx nest build",
+    "build": "npx --no prisma generate && npx --no nest build",
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "node dist/src/main",
     "start:dev": "nest start --watch",
@@ -25,7 +25,6 @@
   "dependencies": {
     "@ai-sdk/openai": "^3.0.47",
     "@google/generative-ai": "^0.21.0",
-    "@nestjs/cli": "^10.0.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
     "@nestjs/core": "^10.0.0",
