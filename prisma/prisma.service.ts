@@ -1,41 +1,62 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
+import 'dotenv/config';
 
 @Injectable()
-export class PrismaService
-  extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
-{
-  constructor() {
-    // 1. Create the connection pool
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    });
-
-    // 2. Setup the adapter
-    const adapter = new PrismaPg(pool);
-
-    // 3. Pass the adapter to the parent PrismaClient constructor
-    // We cast to 'any' because Prisma 7 types can be strict with adapters
-    super({ adapter } as any);
-  }
+export class PrismaService implements OnModuleInit, OnModuleDestroy {
+  private pool: Pool;
+  private prismaClient: PrismaClient;
 
   async onModuleInit() {
-    await this.$connect();
+    try {
+      this.pool = new Pool({ 
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+      });
+      const adapter = new PrismaPg(this.pool);
+      this.prismaClient = new PrismaClient({ adapter });
+      await this.prismaClient.$connect();
+    } catch (e) {
+      console.error('Failed to connect to database:', e);
+    }
   }
 
   async onModuleDestroy() {
-    await this.$disconnect();
-  }
-
-  // Ensure your getters are still here so ChatService doesn't break
-  get documentation() {
-    return this.documentation;
+    if (this.prismaClient) {
+      await this.prismaClient.$disconnect();
+    }
+    if (this.pool) {
+      this.pool.end();
+    }
   }
 
   get profile() {
-    return this.profile;
+    return this.prismaClient.profile;
+  }
+
+  get documentation() {
+    return this.prismaClient.documentation;
+  }
+
+  get document_chunks() {
+    return this.prismaClient.document_chunks;
+  }
+
+  get flashcard() {
+    return this.prismaClient.flashcard;
+  }
+
+  get $connect() {
+    return this.prismaClient.$connect;
+  }
+
+  get $disconnect() {
+    return this.prismaClient.$disconnect;
+  }
+
+  get $transaction() {
+    return this.prismaClient.$transaction;
   }
 }

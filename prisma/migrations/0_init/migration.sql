@@ -50,10 +50,8 @@ CREATE TABLE "flashcards" (
     "front" TEXT NOT NULL,
     "back" TEXT NOT NULL,
     "documentId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "flashcards_pkey" PRIMARY KEY ("id")
 );
-
--- AddForeignKey
-ALTER TABLE "flashcards" ADD CONSTRAINT "flashcards_documentId_fkey" FOREIGN KEY ("documentId") REFERENCES "documents"("id") ON DELETE CASCADE ON UPDATE CASCADE;

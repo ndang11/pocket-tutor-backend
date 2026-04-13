@@ -1,36 +1,61 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
+import { Pool } from 'pg';
 
 @Injectable()
 export class FlashcardService {
   private readonly groq: OpenAI;
+  private pool: Pool;
 
-  constructor(
-    private prisma: PrismaService,
-    private supabase: SupabaseService,
-  ) {
+  constructor(private supabase: SupabaseService) {
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) throw new Error('Missing GROQ_API_KEY');
     this.groq = new OpenAI({
       apiKey: groqKey,
       baseURL: 'https://api.groq.com/openai/v1',
     });
+    this.pool = new Pool({ connectionString: process.env.DATABASE_URL });
   }
 
   async generateForDocument(documentId: string, userId: string) {
-    // 1. Fetch document content from your document_chunks table
-    const { data: chunks, error } = await this.supabase
+    console.log(
+      '[FlashcardService] Generating for documentId:',
+      documentId,
+      'userId:',
+      userId,
+    );
+
+    // 1. Fetch document content from document_chunks table
+    const { data: chunks, error: chunksError } = await this.supabase
       .getClient()
       .from('document_chunks')
       .select('content')
       .eq('document_id', documentId)
-      .limit(10); // Take top 10 chunks for context
+      .limit(10);
 
-    if (error || !chunks) throw new Error('Could not find document content');
+    console.log(
+      '[FlashcardService] Found chunks:',
+      chunks?.length,
+      'error:',
+      chunksError,
+    );
+
+    if (chunksError) {
+      throw new Error(
+        `Failed to fetch document chunks: ${chunksError.message}`,
+      );
+    }
+
+    if (!chunks || chunks.length === 0) {
+      throw new Error(
+        'No content found for this document. Please upload and process the document first.',
+      );
+    }
 
     const context = chunks.map((c) => c.content).join('\n\n');
+    console.log('[FlashcardService] Context length:', context.length);
 
     // 2. Prompt Groq to generate Flashcards
     const completion = await this.groq.chat.completions.create({
@@ -48,25 +73,70 @@ export class FlashcardService {
 
     const rawOutput =
       completion.choices[0].message.content ?? '{"flashcards": []}';
-    const { flashcards } = JSON.parse(rawOutput);
+    console.log('[FlashcardService] Raw AI output:', rawOutput);
 
-    // 3. Save to your brand new PostgreSQL table
-    await (this.prisma as any).flashcard.createMany({
-      data: flashcards.map((card: any) => ({
-        front: card.front,
-        back: card.back,
-        documentId: documentId,
-        userId: userId,
-      })),
-    });
+    let flashcards;
+    try {
+      const parsed = JSON.parse(rawOutput);
+      flashcards = parsed.flashcards || parsed.cards || [];
+    } catch (e) {
+      console.error('[FlashcardService] Failed to parse AI response:', e);
+      throw new Error('Failed to parse AI response');
+    }
+
+    if (!Array.isArray(flashcards) || flashcards.length === 0) {
+      throw new Error('No flashcards could be generated from this document');
+    }
+
+    console.log(
+      '[FlashcardService] Generated',
+      flashcards.length,
+      'flashcards',
+    );
+
+    // 3. Save to flashcards table using raw SQL to bypass foreign key constraints
+    const cardsToCreate = flashcards.map((card: any) => ({
+      id: uuidv4(),
+      front: card.front,
+      back: card.back,
+      documentId: documentId,
+      userId: userId,
+    }));
+
+    console.log('[FlashcardService] Creating cards:', cardsToCreate.length);
+    try {
+      for (const card of cardsToCreate) {
+        await this.pool.query(
+          `INSERT INTO flashcards (id, front, back, "documentId", "userId", created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [card.id, card.front, card.back, card.documentId, card.userId],
+        );
+      }
+      console.log('[FlashcardService] Created:', cardsToCreate.length, 'cards');
+    } catch (err: any) {
+      console.error(
+        '[FlashcardService] Error inserting flashcards:',
+        err.message || err,
+      );
+      throw new Error(`Failed to save flashcards: ${err.message}`);
+    }
 
     return flashcards;
   }
 
   getByDocument(documentId: string) {
-    return (this.prisma as any).flashcard.findMany({
-      where: { documentId },
-      orderBy: { created_at: 'desc' },
-    });
+    return this.pool.query(
+      `SELECT id, front, back, "documentId", "userId", created_at
+       FROM flashcards WHERE "documentId" = $1 ORDER BY created_at DESC`,
+      [documentId],
+    );
+  }
+
+  getByUser(userId: string) {
+    return this.pool.query(
+      `SELECT id, front, back, "documentId", "userId", created_at
+       FROM flashcards WHERE "userId" = $1 ORDER BY created_at DESC`,
+      [userId],
+    );
   }
 }

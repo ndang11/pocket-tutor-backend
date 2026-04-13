@@ -9,6 +9,7 @@ import { EmbeddingModule } from './embedding/embedding.module';
 import { ChatModule } from './chat/chat.module';
 import { QuizModule } from './quiz/quiz.module';
 import { FlashcardModule } from './flashcard/flashcard.module';
+import { HistoryModule } from './history/history.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { FlashcardModule } from './flashcard/flashcard.module';
     }),
     QuizModule,
     FlashcardModule,
+    HistoryModule,
   ],
   controllers: [AppController],
   providers: [AppService],
