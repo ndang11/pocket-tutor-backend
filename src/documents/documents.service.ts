@@ -10,11 +10,16 @@ import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
 import { PdfReader } from 'pdfreader';
 import PDFParser from 'pdf2json';
+import * as pdfConvert from 'pdf-img-convert';
+import pdfParse from 'pdf-parse';
+import sharp from 'sharp';
+import Groq from 'groq-sdk';
 
 @Injectable()
 export class DocumentsService implements OnModuleInit {
   private readonly logger = new Logger(DocumentsService.name);
-  private pdfParse: any;
+  private groq: Groq;
+
   private readonly supportedImageExtensions = new Set([
     'jpg',
     'jpeg',
@@ -30,10 +35,65 @@ export class DocumentsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly supabase: SupabaseService,
     private readonly embedding: EmbeddingService,
-  ) {}
+  ) {
+    this.logger.log(
+      `ENV CHECK: Key is ${process.env.GEMINI_API_KEY ? 'DEFINED' : 'UNDEFINED'}`,
+    );
+  }
 
-  async onModuleInit() {
-    this.pdfParse = (await import('pdf-parse')).default;
+  onModuleInit() {
+    this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY! });
+    this.logger.log('Groq client initialized');
+  }
+
+  private async resizeImage(buffer: Buffer): Promise<Buffer> {
+    return await sharp(buffer).resize(1024).jpeg({ quality: 80 }).toBuffer();
+  }
+
+  private async extractImageText(file: Express.Multer.File): Promise<string> {
+    this.logger.log(
+      `Processing image: ${file.originalname} (Size: ${file.size} bytes)`,
+    );
+
+    const resizedBuffer = await this.resizeImage(file.buffer);
+
+    return this.extractTextWithGeminiVision(
+      resizedBuffer,
+      'image/jpeg',
+      `This is a photo of a student's hand-written notebook from a school in Cameroon.
+        
+        INSTRUCTIONS:
+        1. Transcribe the handwriting exactly as written.
+        2. If there are diagrams or drawings, describe them briefly in [brackets].
+        3. Preserve the structure (headings, dates, bullet points).
+        4. If a word is unreadable, use [unreadable] instead of guessing.
+        5. Stay true to the notes, including local context.`,
+    );
+  }
+
+  private async runGeminiVisionOnBase64(
+    base64: string,
+    mimeType: string,
+    prompt: string,
+  ): Promise<string> {
+    const response = await this.groq.chat.completions.create({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${mimeType};base64,${base64}` },
+            },
+          ],
+        },
+      ],
+      max_tokens: 4096,
+    });
+
+    return response.choices[0]?.message?.content ?? '';
   }
 
   private async extractTextWithGeminiVision(
@@ -42,206 +102,49 @@ export class DocumentsService implements OnModuleInit {
     prompt: string,
   ): Promise<string> {
     try {
-      const { GoogleGenerativeAI } = await import('@google/generative-ai');
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-2.0-flash-lite',
-      });
-
       const base64 = buffer.toString('base64');
-
-      const result = await model.generateContent([
-        {
-          inlineData: {
-            mimeType,
-            data: base64,
-          },
-        },
-        {
-          text: prompt,
-        },
-      ]);
-
-      const text = result.response.text();
-      this.logger.log(`Gemini Vision extracted ${text.length} chars`);
+      const text = await this.runGeminiVisionOnBase64(base64, mimeType, prompt);
+      this.logger.log(`Groq Vision extracted ${text.length} chars`);
       return this.normalizeExtractedText(text);
     } catch (err) {
       const error = err as Error;
-      this.logger.warn(`Gemini Vision OCR failed: ${error.message}`);
+      this.logger.error(`GROQ VISION ERROR: ${error.message}`);
       return '';
     }
   }
 
-  private async extractImageText(file: Express.Multer.File): Promise<string> {
-    const mimeType = file.mimetype || this.getImageMimeType(file.originalname);
-
-    return this.extractTextWithGeminiVision(
-      file.buffer,
-      mimeType,
-      'Extract all readable text from this image of study notes. Preserve headings, bullets, equations, and short line breaks where possible. Return only the raw text with no commentary.',
-    );
-  }
-
-  private async extractEpubText(file: Express.Multer.File): Promise<string> {
+  private async extractTextFromPdfImages(buffer: Buffer): Promise<string> {
     try {
-      const JSZipModule = await import('jszip');
-      const JSZip = JSZipModule.default;
-      const xml2js = await import('xml2js');
+      this.logger.log('Converting PDF pages to images for OCR...');
 
-      const zip = await JSZip.loadAsync(file.buffer);
-      const containerEntry = zip.file('META-INF/container.xml');
+      const pgs = await pdfConvert.convert(buffer, {
+        page_numbers: [1, 2, 3, 4, 5], // Limit to first 5 pages for performance
+        width: 1200,
+        base64: true,
+      });
 
-      if (!containerEntry) {
-        throw new Error('EPUB container.xml not found');
-      }
-
-      const containerXml = await containerEntry.async('text');
-      const container = await xml2js.parseStringPromise(containerXml);
-      const rootfilePath =
-        container?.container?.rootfiles?.[0]?.rootfile?.[0]?.$?.['full-path'];
-
-      if (!rootfilePath || typeof rootfilePath !== 'string') {
-        throw new Error('EPUB package document path not found');
-      }
-
-      const packageEntry = zip.file(rootfilePath);
-      if (!packageEntry) {
-        throw new Error('EPUB package document missing');
-      }
-
-      const packageXml = await packageEntry.async('text');
-      const packageDoc = await xml2js.parseStringPromise(packageXml);
-      const packageDir = this.getDirectoryName(rootfilePath);
-
-      const manifestItems =
-        packageDoc?.package?.manifest?.[0]?.item?.map((item: any) => ({
-          id: item?.$?.id as string | undefined,
-          href: item?.$?.href as string | undefined,
-          mediaType: item?.$?.['media-type'] as string | undefined,
-        })) || [];
-
-      const manifestById = new Map(
-        manifestItems
-          .filter((item: { id?: string }) => !!item.id)
-          .map((item: { id?: string; href?: string; mediaType?: string }) => [
-            item.id as string,
-            item,
-          ]),
+      this.logger.log(
+        `Memory Usage: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`,
       );
 
-      const spineRefs =
-        packageDoc?.package?.spine?.[0]?.itemref?.map(
-          (itemref: any) => itemref?.$?.idref as string | undefined,
-        ) || [];
+      const pageImages = pgs as string[];
 
-      const chapterPaths = spineRefs
-        .map((idref: string | undefined) =>
-          idref ? manifestById.get(idref) : undefined,
-        )
-        .filter(
-          (
-            item:
-              | {
-                  href?: string;
-                  mediaType?: string;
-                }
-              | undefined,
-          ) =>
-            !!item?.href &&
-            [
-              'application/xhtml+xml',
-              'text/html',
-              'application/xml',
-              'text/xml',
-            ].includes(item.mediaType || ''),
-        )
-        .map((item: { href?: string }) =>
-          this.resolveZipPath(packageDir, item.href as string),
-        );
+      // Process pages in parallel to save time
+      const pagePromises = pageImages.map((img, i) =>
+        this.runGeminiVisionOnBase64(
+          img,
+          'image/png',
+          'Extract all text from this page. Preserve formatting and equations.',
+        ).then((text) => `\n\n--- Page ${i + 1} ---\n\n${text}`),
+      );
 
-      const chapterTexts: string[] = [];
-
-      for (const chapterPath of chapterPaths) {
-        const chapterEntry = zip.file(chapterPath);
-        if (!chapterEntry) {
-          continue;
-        }
-
-        const chapterContent = await chapterEntry.async('text');
-        const cleaned = this.extractTextFromMarkup(chapterContent);
-
-        if (cleaned) {
-          chapterTexts.push(cleaned);
-        }
-      }
-
-      if (!chapterTexts.length) {
-        const fallbackTexts: string[] = [];
-
-        for (const fileName of Object.keys(zip.files)) {
-          if (!/\.(xhtml|html|htm)$/i.test(fileName)) {
-            continue;
-          }
-
-          const entry = zip.file(fileName);
-          if (!entry) {
-            continue;
-          }
-
-          const content = await entry.async('text');
-          const cleaned = this.extractTextFromMarkup(content);
-
-          if (cleaned) {
-            fallbackTexts.push(cleaned);
-          }
-        }
-
-        return this.normalizeExtractedText(fallbackTexts.join('\n\n'));
-      }
-
-      return this.normalizeExtractedText(chapterTexts.join('\n\n'));
+      const results = await Promise.all(pagePromises);
+      return results.join('');
     } catch (err) {
       const error = err as Error;
-      this.logger.error(`EPUB parse failed: ${error.message}`);
+      this.logger.error(`PDF-to-Image OCR failed: ${error.message}`);
       return '';
     }
-  }
-
-  private async extractText(file: Express.Multer.File): Promise<string> {
-    const ext = file.originalname.split('.').pop()?.toLowerCase();
-
-    if (ext === 'pdf') {
-      return this.extractPdfText(file.buffer, file.originalname);
-    }
-
-    if (ext === 'docx') {
-      try {
-        const result = await mammoth.extractRawText({
-          buffer: file.buffer,
-        });
-        return this.normalizeExtractedText(result.value || '');
-      } catch (err) {
-        const error = err as Error;
-        this.logger.error(`DOCX parse failed: ${error.message}`);
-        return '';
-      }
-    }
-
-    if (ext === 'txt') {
-      return this.normalizeExtractedText(file.buffer.toString('utf-8'));
-    }
-
-    if (ext === 'epub') {
-      return this.extractEpubText(file);
-    }
-
-    if (ext && this.supportedImageExtensions.has(ext)) {
-      return this.extractImageText(file);
-    }
-
-    throw new BadRequestException(
-      'Unsupported file type. Upload PDF, DOCX, TXT, EPUB, or an image file such as JPG, PNG, WEBP, HEIC.',
-    );
   }
 
   private async extractPdfText(
@@ -275,17 +178,14 @@ export class DocumentsService implements OnModuleInit {
     }
 
     this.logger.log(
-      `Standard extraction failed for ${originalName}, trying OCR...`,
+      `Standard extraction failed for ${originalName}, converting to images for OCR...`,
     );
-    const ocrText = await this.extractTextWithGeminiVision(
-      buffer,
-      'application/pdf',
-      'Extract all the text content from this PDF document. Return only the raw text, no formatting, no commentary.',
-    );
+
+    const ocrText = await this.extractTextFromPdfImages(buffer);
 
     if (ocrText && ocrText.length >= 50) {
       this.logger.log(
-        `OCR extracted ${ocrText.length} chars from ${originalName}`,
+        `Image-based OCR extracted ${ocrText.length} chars from ${originalName}`,
       );
       return ocrText;
     }
@@ -298,11 +198,17 @@ export class DocumentsService implements OnModuleInit {
 
   private async tryPdfParse(buffer: Buffer): Promise<string> {
     try {
-      if (!this.pdfParse) {
-        this.pdfParse = (await import('pdf-parse')).default;
+      const originalWarn = console.warn;
+      const originalLog = console.log;
+      console.warn = () => {};
+      console.log = () => {};
+      try {
+        const data = await pdfParse(buffer, { pagerender: false });
+        return this.normalizeExtractedText(data.text || '');
+      } finally {
+        console.warn = originalWarn;
+        console.log = originalLog;
       }
-      const data = await this.pdfParse(buffer);
-      return this.normalizeExtractedText(data.text || '');
     } catch (err) {
       const error = err as Error;
       this.logger.warn(`pdf-parse failed: ${error.message}`);
@@ -377,6 +283,147 @@ export class DocumentsService implements OnModuleInit {
     });
   }
 
+  private async extractEpubText(file: Express.Multer.File): Promise<string> {
+    try {
+      const JSZipModule = await import('jszip');
+      const JSZip = JSZipModule.default;
+      const xml2js = await import('xml2js');
+
+      const zip = await JSZip.loadAsync(file.buffer);
+      const containerEntry = zip.file('META-INF/container.xml');
+
+      if (!containerEntry) {
+        throw new Error('EPUB container.xml not found');
+      }
+
+      const containerXml = await containerEntry.async('text');
+      const container = await xml2js.parseStringPromise(containerXml);
+      const rootfilePath =
+        container?.container?.rootfiles?.[0]?.rootfile?.[0]?.$?.['full-path'];
+
+      if (!rootfilePath || typeof rootfilePath !== 'string') {
+        throw new Error('EPUB package document path not found');
+      }
+
+      const packageEntry = zip.file(rootfilePath);
+      if (!packageEntry) {
+        throw new Error('EPUB package document missing');
+      }
+
+      const packageXml = await packageEntry.async('text');
+      const packageDoc = await xml2js.parseStringPromise(packageXml);
+      const packageDir = this.getDirectoryName(rootfilePath);
+
+      const manifestItems =
+        packageDoc?.package?.manifest?.[0]?.item?.map((item: any) => ({
+          id: item?.$?.id as string | undefined,
+          href: item?.$?.href as string | undefined,
+          mediaType: item?.$?.['media-type'] as string | undefined,
+        })) || [];
+
+      const manifestById = new Map(
+        manifestItems
+          .filter((item: { id?: string }) => !!item.id)
+          .map((item: { id?: string; href?: string; mediaType?: string }) => [
+            item.id as string,
+            item,
+          ]),
+      );
+
+      const spineRefs =
+        packageDoc?.package?.spine?.[0]?.itemref?.map(
+          (itemref: any) => itemref?.$?.idref as string | undefined,
+        ) || [];
+
+      const chapterPaths = spineRefs
+        .map((idref: string | undefined) =>
+          idref ? manifestById.get(idref) : undefined,
+        )
+        .filter(
+          (item: { href?: string; mediaType?: string } | undefined) =>
+            !!item?.href &&
+            [
+              'application/xhtml+xml',
+              'text/html',
+              'application/xml',
+              'text/xml',
+            ].includes(item.mediaType || ''),
+        )
+        .map((item: { href?: string }) =>
+          this.resolveZipPath(packageDir, item.href as string),
+        );
+
+      const chapterTexts: string[] = [];
+
+      for (const chapterPath of chapterPaths) {
+        const chapterEntry = zip.file(chapterPath);
+        if (!chapterEntry) continue;
+
+        const chapterContent = await chapterEntry.async('text');
+        const cleaned = this.extractTextFromMarkup(chapterContent);
+        if (cleaned) chapterTexts.push(cleaned);
+      }
+
+      if (!chapterTexts.length) {
+        const fallbackTexts: string[] = [];
+
+        for (const fileName of Object.keys(zip.files)) {
+          if (!/\.(xhtml|html|htm)$/i.test(fileName)) continue;
+
+          const entry = zip.file(fileName);
+          if (!entry) continue;
+
+          const content = await entry.async('text');
+          const cleaned = this.extractTextFromMarkup(content);
+          if (cleaned) fallbackTexts.push(cleaned);
+        }
+
+        return this.normalizeExtractedText(fallbackTexts.join('\n\n'));
+      }
+
+      return this.normalizeExtractedText(chapterTexts.join('\n\n'));
+    } catch (err) {
+      const error = err as Error;
+      this.logger.error(`EPUB parse failed: ${error.message}`);
+      return '';
+    }
+  }
+
+  private async extractText(file: Express.Multer.File): Promise<string> {
+    const ext = file.originalname.split('.').pop()?.toLowerCase();
+
+    if (ext === 'pdf') {
+      return this.extractPdfText(file.buffer, file.originalname);
+    }
+
+    if (ext === 'docx') {
+      try {
+        const result = await mammoth.extractRawText({ buffer: file.buffer });
+        return this.normalizeExtractedText(result.value || '');
+      } catch (err) {
+        const error = err as Error;
+        this.logger.error(`DOCX parse failed: ${error.message}`);
+        return '';
+      }
+    }
+
+    if (ext === 'txt') {
+      return this.normalizeExtractedText(file.buffer.toString('utf-8'));
+    }
+
+    if (ext === 'epub') {
+      return this.extractEpubText(file);
+    }
+
+    if (ext && this.supportedImageExtensions.has(ext)) {
+      return this.extractImageText(file);
+    }
+
+    throw new BadRequestException(
+      'Unsupported file type. Upload PDF, DOCX, TXT, EPUB, or an image file such as JPG, PNG, WEBP, HEIC.',
+    );
+  }
+
   private extractTextFromMarkup(markup: string): string {
     return this.normalizeExtractedText(
       markup
@@ -388,23 +435,20 @@ export class DocumentsService implements OnModuleInit {
         .replace(/<li[^>]*>/gi, '\n• ')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/gi, ' ')
-        .replace(/&/gi, '&')
-        .replace(/</gi, '<')
-        .replace(/>/gi, '>')
-        .replace(/"/gi, '"')
-        .replace(/'/gi, "'"),
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'"),
     );
   }
 
   private getDirectoryName(filePath: string): string {
     const normalizedPath = filePath.replace(/\\/g, '/');
     const lastSlashIndex = normalizedPath.lastIndexOf('/');
-
-    if (lastSlashIndex === -1) {
-      return '';
-    }
-
-    return normalizedPath.slice(0, lastSlashIndex + 1);
+    return lastSlashIndex === -1
+      ? ''
+      : normalizedPath.slice(0, lastSlashIndex + 1);
   }
 
   private resolveZipPath(baseDir: string, relativePath: string): string {
@@ -412,15 +456,11 @@ export class DocumentsService implements OnModuleInit {
     const resolved: string[] = [];
 
     for (const segment of segments) {
-      if (!segment || segment === '.') {
-        continue;
-      }
-
+      if (!segment || segment === '.') continue;
       if (segment === '..') {
         resolved.pop();
         continue;
       }
-
       resolved.push(segment);
     }
 
@@ -454,9 +494,7 @@ export class DocumentsService implements OnModuleInit {
   private selectBestPdfExtraction(
     attempts: Array<{ source: string; text: string }>,
   ): { source: string; text: string } | null {
-    if (!attempts.length) {
-      return null;
-    }
+    if (!attempts.length) return null;
 
     return attempts.sort(
       (a, b) =>
@@ -467,7 +505,7 @@ export class DocumentsService implements OnModuleInit {
   private scoreExtractedText(text: string): number {
     const normalized = this.normalizeExtractedText(text);
     const words = normalized.split(/\s+/).filter(Boolean);
-    const uniqueWords = new Set(words.map((word) => word.toLowerCase()));
+    const uniqueWords = new Set(words.map((w) => w.toLowerCase()));
     const alphanumericChars = (normalized.match(/[A-Za-z0-9]/g) || []).length;
 
     return normalized.length + uniqueWords.size * 2 + alphanumericChars;
@@ -499,17 +537,12 @@ export class DocumentsService implements OnModuleInit {
       throw new BadRequestException(`Storage delete failed: ${error.message}`);
     }
 
-    const doc = await this.prisma.documentation.findFirst({
-      where: { path },
-    });
+    const doc = await this.prisma.documentation.findFirst({ where: { path } });
 
     if (!doc) throw new BadRequestException('Document not found');
 
     await client.from('document_chunks').delete().eq('document_id', doc.id);
-
-    await this.prisma.documentation.delete({
-      where: { id: doc.id },
-    });
+    await this.prisma.documentation.delete({ where: { id: doc.id } });
 
     return { message: 'Document deleted successfully' };
   }
@@ -535,9 +568,7 @@ export class DocumentsService implements OnModuleInit {
     });
 
     if (!profile) {
-      profile = await this.prisma.profile.create({
-        data: { id: userId },
-      });
+      profile = await this.prisma.profile.create({ data: { id: userId } });
       this.logger.log(`Created profile for user ${userId}`);
     }
 
@@ -561,23 +592,20 @@ export class DocumentsService implements OnModuleInit {
       `Extracted ${extractedText.length} chars from ${file.originalname}`,
     );
 
-    if (extractedText.trim().length < 100) {
-      await this.supabase
-        .getClient()
-        .storage.from('documents')
-        .remove([storagePath]);
+    if (extractedText.trim().length < 20) {
+      this.logger.warn(
+        `Extracted very little text (${extractedText.length} chars) from ${file.originalname}`,
+      );
+    }
 
+    if (!extractedText || extractedText.trim().length < 50) {
       throw new BadRequestException(
-        'This file appears to contain little or no extractable text. If it is a scanned or image-heavy file, try a clearer image or document. Supported formats: PDF, DOCX, TXT, EPUB, JPG, PNG, WEBP, HEIC.',
+        'The AI could not read any text from this file. Please ensure the file is clear and readable.',
       );
     }
 
     const document = await this.prisma.documentation.create({
-      data: {
-        title,
-        path: data.path,
-        userId,
-      },
+      data: { title, path: data.path, userId },
     });
 
     this.processEmbeddingsInBackground(
@@ -614,9 +642,7 @@ export class DocumentsService implements OnModuleInit {
 
       const { error } = await client.from('document_chunks').insert(payload);
 
-      if (error) {
-        throw new Error(error.message);
-      }
+      if (error) throw new Error(error.message);
 
       this.logger.log(`Processed ${payload.length} chunks for doc ${docId}`);
     } catch (err) {

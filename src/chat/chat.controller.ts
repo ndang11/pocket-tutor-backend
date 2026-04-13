@@ -20,18 +20,37 @@ export class ChatController {
     @Body('question') question: string,
   ) {
     this.logger.log(
-      `Received request: documentId=${documentId}, userId=${userId}, question=${question?.substring(0, 50)}...`,
+      `[ask] doc=${documentId}, user=${userId}, q="${question?.slice(0, 40)}..."`,
     );
 
-    if (!documentId?.trim() || !userId?.trim() || !question?.trim()) {
-      this.logger.error(
-        `Missing fields - documentId: ${!!documentId}, userId: ${!!userId}, question: ${!!question}`,
+    if (!documentId || documentId.trim() === '' || documentId === 'undefined') {
+      this.logger.warn(
+        `[ask] Redirecting to freeChat because documentId is missing`,
       );
-      throw new BadRequestException(
-        'documentId, userId and question are required',
-      );
+      return this.chatService.freeChat(userId, question, []);
     }
 
     return this.chatService.ask(documentId, userId, question);
+  }
+
+  @Post('free')
+  async freeChat(
+    @Body('userId') userId: string,
+    @Body('question') question: string,
+    @Body('documentId') documentId?: string,
+    @Body('history')
+    history: { role: 'user' | 'assistant'; content: string }[] = [],
+  ) {
+    this.logger.log(
+      `[free] user=${userId}, doc=${documentId ?? 'none'}, history=${history?.length}`,
+    );
+
+    if (!userId?.trim() || !question?.trim()) {
+      throw new BadRequestException('userId and question are required');
+    }
+
+    const safeHistory = Array.isArray(history) ? history : [];
+
+    return this.chatService.freeChat(userId, question, safeHistory, documentId);
   }
 }
