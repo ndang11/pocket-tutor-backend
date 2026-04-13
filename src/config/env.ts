@@ -22,7 +22,7 @@ export const env = {
 
 // Validate required environment variables
 export function validateEnv(): void {
-  const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
+  const required = ['SUPABASE_URL'];
   const missing = required.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {

@@ -8,11 +8,11 @@ export class EmbeddingService {
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Missing GEMINI_API_KEY in environment variables');
+    if (!apiKey) throw new Error('Missing GEMINI_API_KEY');
     this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
-  chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
+  chunkText(text: string, chunkSize = 1000, overlap = 100): string[] {
     const words = text.split(/\s+/).filter(Boolean);
     const chunks: string[] = [];
     let start = 0;
@@ -35,15 +35,20 @@ export class EmbeddingService {
   async chunkAndEmbed(
     text: string,
   ): Promise<{ chunk: string; embedding: number[] }[]> {
-    const chunks = this.chunkText(text);
+    const chunks = this.chunkText(text, 1000, 100);
     this.logger.log(`Chunking text into ${chunks.length} chunks`);
 
     const results: { chunk: string; embedding: number[] }[] = [];
 
     for (const chunk of chunks) {
-      const embedding = await this.embedText(chunk);
-      results.push({ chunk, embedding });
-      await new Promise(res => setTimeout(res, 500));
+      try {
+        const embedding = await this.embedText(chunk);
+        results.push({ chunk, embedding });
+
+        await new Promise((res) => setTimeout(res, 4000));
+      } catch (error) {
+        this.logger.error(`Failed to embed chunk: ${error.message}`);
+      }
     }
 
     this.logger.log(`Generated ${results.length} embeddings`);
