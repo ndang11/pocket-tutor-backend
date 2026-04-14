@@ -10,10 +10,16 @@ import { EmbeddingService } from '../embedding/embedding.service';
 import * as mammoth from 'mammoth';
 import { PdfReader } from 'pdfreader';
 import PDFParser from 'pdf2json';
-import * as pdfConvert from 'pdf-img-convert';
 import pdfParse from 'pdf-parse';
 import sharp from 'sharp';
 import Groq from 'groq-sdk';
+
+let pdfConvert: any = null;
+try {
+  pdfConvert = require('pdf-img-convert');
+} catch (e) {
+  console.warn('pdf-img-convert not available, OCR fallback disabled');
+}
 
 @Injectable()
 export class DocumentsService implements OnModuleInit {
@@ -114,6 +120,9 @@ export class DocumentsService implements OnModuleInit {
   }
 
   private async extractTextFromPdfImages(buffer: Buffer): Promise<string> {
+    if (!pdfConvert) {
+      throw new Error('PDF image conversion not available on this system');
+    }
     try {
       this.logger.log('Converting PDF pages to images for OCR...');
 
