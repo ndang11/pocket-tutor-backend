@@ -48,6 +48,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prismaClient.flashcard;
   }
 
+  get educationLevel() {
+    return this.prismaClient.educationLevel;
+  }
+
+  get stream() {
+    return this.prismaClient.stream;
+  }
+
+  get subject() {
+    return this.prismaClient.subject;
+  }
+
   get $connect() {
     return this.prismaClient.$connect;
   }

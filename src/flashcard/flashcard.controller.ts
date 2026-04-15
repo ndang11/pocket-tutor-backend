@@ -1,5 +1,5 @@
 // src/flashcards/flashcards.controller.ts
-import { Controller, Post, Get, Body, Param } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, HttpException, HttpStatus } from '@nestjs/common';
 import { FlashcardService } from './flashcard.service';
 
 @Controller('flashcards')
@@ -30,8 +30,21 @@ export class FlashcardController {
       );
 
       return { flashcards: savedCards?.rows || [] };
-    } catch (err) {
-      console.error('[FlashcardController] generate error:', err);
+    } catch (err: any) {
+      console.error('[FlashcardController] generate error:', err.message);
+      // Return 400 for business logic errors, 500 for unexpected
+      if (err.message.includes('No content found')) {
+        throw new HttpException({
+          statusCode: 400,
+          message: err.message,
+        }, HttpStatus.BAD_REQUEST);
+      }
+      if (err.message.includes('Failed to save')) {
+        throw new HttpException({
+          statusCode: 500,
+          message: 'Failed to save flashcards',
+        }, HttpStatus.INTERNAL_SERVER_ERROR);
+      }
       throw err;
     }
   }

@@ -7,12 +7,14 @@ datasource db {
 }
 
 model Profile {
-  id              String          @id @default(uuid())
-  full_name       String?
+  id               String           @id @default(uuid())
+  full_name        String?
   academic_system String?
-  created_at      DateTime        @default(now())
+  educationLevelId String?
+  educationLevel  EducationLevel? @relation(fields: [educationLevelId], references: [id])
   documents       Documentation[]
   flashcards      Flashcard[]
+  created_at      DateTime         @default(now())
   @@map("profiles")
 }
 
@@ -53,4 +55,36 @@ model Flashcard {
   document   Documentation @relation(fields: [documentId], references: [id], onDelete: Cascade)
   profile    Profile       @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("flashcards")
+}
+
+model EducationLevel {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  slug        String    @unique
+  order       Int
+  description String?
+  streams     Stream[]
+  profiles   Profile[]
+  created_at  DateTime   @default(now())
+  @@map("education_levels")
+}
+
+model Stream {
+  id               String          @id @default(uuid())
+  name             String
+  slug             String        @unique
+  description     String?
+  educationLevelId String
+  educationLevel  EducationLevel @relation(fields: [educationLevelId], references: [id], onDelete: Cascade)
+  subjects         Subject[]
+  @@map("streams")
+}
+
+model Subject {
+  id       String @id @default(uuid())
+  name     String
+  slug     String
+  streamId String
+  stream   Stream  @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  @@map("subjects")
 }
