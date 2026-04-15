@@ -10,6 +10,7 @@ import { ChatModule } from './chat/chat.module';
 import { QuizModule } from './quiz/quiz.module';
 import { FlashcardModule } from './flashcard/flashcard.module';
 import { HistoryModule } from './history/history.module';
+import { SyllabusModule } from './syllabus/syllabus.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { HistoryModule } from './history/history.module';
     QuizModule,
     FlashcardModule,
     HistoryModule,
+    SyllabusModule,
   ],
   controllers: [AppController],
   providers: [AppService],
