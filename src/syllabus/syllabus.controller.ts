@@ -1,9 +1,27 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body } from '@nestjs/common';
 import { SyllabusService } from './syllabus.service';
 
 @Controller('syllabus')
 export class SyllabusController {
   constructor(private readonly syllabusService: SyllabusService) {}
+
+  @Get('user/:userId')
+  async getUserSyllabus(@Param('userId') userId: string) {
+    return this.syllabusService.getUserSyllabus(userId);
+  }
+
+  @Post('select')
+  async selectSyllabus(
+    @Body('userId') userId: string,
+    @Body('educationLevelId') educationLevelId: string,
+    @Body('streamId') streamId: string,
+  ) {
+    return this.syllabusService.updateUserSyllabus(
+      userId,
+      educationLevelId,
+      streamId,
+    );
+  }
 
   @Get('levels')
   async getAllEducationLevels() {
