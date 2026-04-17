@@ -12,9 +12,11 @@ model Profile {
   academic_system String?
   educationLevelId String?
   educationLevel  EducationLevel? @relation(fields: [educationLevelId], references: [id])
-  documents       Documentation[]
-  flashcards      Flashcard[]
-  created_at      DateTime         @default(now())
+  streamId        String?
+  stream         Stream?         @relation(fields: [streamId], references: [id])
+  documents      Documentation[]
+  flashcards     Flashcard[]
+  created_at     DateTime         @default(now())
   @@map("profiles")
 }
 
@@ -77,6 +79,7 @@ model Stream {
   educationLevelId String
   educationLevel  EducationLevel @relation(fields: [educationLevelId], references: [id], onDelete: Cascade)
   subjects         Subject[]
+  profiles        Profile[]
   @@map("streams")
 }
 
@@ -87,4 +90,20 @@ model Subject {
   streamId String
   stream   Stream  @relation(fields: [streamId], references: [id], onDelete: Cascade)
   @@map("subjects")
+}
+
+model StudyHistory {
+  id              String   @id @default(uuid())
+  userId          String
+  type            String
+  title           String
+  description     String?
+  duration        Int?
+  score           Int?
+  totalQuestions  Int?
+  correctAnswers  Int?
+  documentId      String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("study_history")
 }

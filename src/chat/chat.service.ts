@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import OpenAI from 'openai';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class ChatService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly embedding: EmbeddingService,
+    private readonly prisma: PrismaService,
   ) {
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) throw new Error('Missing GROQ_API_KEY');
@@ -65,6 +67,146 @@ STUDENT QUESTION:
 ${question}
 
 Answer as the ultimate friendly mentor.`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Syllabus-aware chat methods
+  // ---------------------------------------------------------------------------
+
+  private async getUserSyllabusContext(userId: string) {
+    try {
+      const profile = await this.prisma.profile.findUnique({
+        where: { id: userId },
+        include: {
+          educationLevel: {
+            include: {
+              streams: {
+                include: {
+                  subjects: true,
+                },
+              },
+            },
+          },
+          stream: {
+            include: {
+              subjects: true,
+              educationLevel: true,
+            },
+          },
+        },
+      });
+
+      if (!profile?.educationLevel && !profile?.stream) {
+        this.logger.log(`No syllabus context found for user ${userId}`);
+        return null;
+      }
+
+      this.logger.log(
+        `Syllabus context found: ${profile.educationLevel?.name} - ${profile.stream?.name}`,
+      );
+      return {
+        educationLevel: profile.educationLevel?.name || undefined,
+        educationLevelDescription: profile.educationLevel?.description || undefined,
+        stream: profile.stream?.name || undefined,
+        streamDescription: profile.stream?.description || undefined,
+        subjects:
+          profile.stream?.subjects?.map((s) => ({
+            name: s.name,
+            slug: s.slug,
+          })) || [],
+        levelStreams:
+          profile.educationLevel?.streams?.map((s) => ({
+            name: s.name,
+            slug: s.slug,
+          })) || [],
+      };
+    } catch (err) {
+      this.logger.warn(`Failed to get syllabus context: ${err?.message}`);
+      return null;
+    }
+  }
+
+  private buildSyllabusWelcomePrompt(
+    syllabusContext: {
+      educationLevel?: string;
+      educationLevelDescription?: string;
+      stream?: string;
+      streamDescription?: string;
+      subjects: { name: string; slug: string }[];
+      levelStreams?: { name: string; slug: string }[];
+    },
+    userMessage: string,
+    isFirstTurn: boolean,
+  ): string {
+    const subjectList = syllabusContext.subjects
+      .map((s) => `• ${s.name}`)
+      .join('\n');
+
+    const hasSelectedSubject = syllabusContext.subjects.some(
+      (s) =>
+        userMessage.toLowerCase().includes(s.name.toLowerCase()) ||
+        userMessage.toLowerCase().includes(s.slug.toLowerCase()),
+    );
+
+    if (hasSelectedSubject || !isFirstTurn) {
+      return `You are "Pocket Tutor" - A helpful study partner for Cameroonian students.
+
+STUDENT CONTEXT:
+- Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
+- Available Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
+
+IMPORTANT: The student has already selected their subject (or you're continuing the conversation). DO NOT repeat the welcome message or ask which subject again.
+
+When explaining topics, use this friendly color format:
+- For MAIN TOPICS (major concepts): Use **bold text with a friendly color** like: **Photosynthesis** or 🌟 **Cell Division**
+- For SUB-TOPICS (smaller topics under a main topic): Use regular text or with a softer format like: • Cell Energy or → Mitosis
+
+Use emoji prefixes to make it friendly:
+- 🌟 for main topics
+- • for sub-topics  
+- 📚 for key concepts
+- 💡 for tips or remember this points
+- 🎯 for the main focus
+
+STYLE:
+- Be friendly but professional
+- Keep responses clear and concise
+- Use headings: MAIN CONCEPT, KEY POINTS, REMEMBER THIS
+- Ask what specific topic they want to learn next
+
+Now respond to the student's message naturally without repeating the welcome!`;
+    }
+
+    return `You are "Pocket Tutor" - A helpful study partner for Cameroonian students.
+
+STUDENT CONTEXT:
+- Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
+- Your Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
+
+GREETING:
+"Hello! I'm your personal tutor. I can see you're in ${syllabusContext.educationLevel} studying ${syllabusContext.stream}. Here are your subjects:"
+
+List the subjects in a simple, friendly format.
+
+Then ask: "Which subject would you like to start with? Just tell me what topic you're learning and I'll explain it in a simple, fun way!"
+
+IMPORTANT: After the student picks a subject, DO NOT repeat this welcome message again in your next response. Just continue the conversation naturally.
+
+When explaining topics, use this friendly color format:
+- For MAIN TOPICS (major concepts): Use **bold text** like: **Photosynthesis** or 🌟 **Cell Division**
+- For SUB-TOPICS (smaller topics under a main topic): Use regular text or with emoji: • Cell Energy or → Mitosis
+
+Use emoji prefixes to make it friendly:
+- 🌟 for main topics
+- • for sub-topics  
+- 📚 for key concepts
+- 💡 for tips
+- 🎯 for the main focus
+
+STYLE:
+- Be friendly and encouraging
+- Keep responses clear and concise
+- Use headings: MAIN CONCEPT, KEY POINTS, REMEMBER THIS`;
   }
 
   private buildFreeChatPrompt(
@@ -295,19 +437,27 @@ TONE & PERSONALITY:
     };
   }
 
-  /**
-   * Free chat — no document required.
-   * Supports multi-turn conversation via an optional history array.
-   * If documentId is provided, relevant chunks are fetched and injected as context.
-   */
+/**
+    * Free chat — no document required.
+    * Supports multi-turn conversation via an optional history array.
+    * If documentId is provided, relevant chunks are fetched and injected as context.
+    * If user has syllabus context (education level + stream), shows syllabus-aware welcome.
+    */
   async freeChat(
     userId: string,
     question: string,
     history: { role: 'user' | 'assistant'; content: string }[] = [],
     documentId?: string,
   ) {
-    if (!userId?.trim() || !question?.trim()) {
+    // Allow empty question for initial welcome message (new conversation only)
+    const isInitialGreeting = history.length === 0 && !question?.trim();
+    if (!userId?.trim() || (!question?.trim() && !isInitialGreeting)) {
       throw new BadRequestException('userId and question are required');
+    }
+
+    // For initial greeting, use a default greeting
+    if (isInitialGreeting) {
+      question = 'Hello!';
     }
 
     const { data: profile } = await this.supabase
@@ -316,6 +466,16 @@ TONE & PERSONALITY:
       .select('full_name, academic_system, topic, study_hours, learning_style')
       .eq('id', userId)
       .single();
+
+    // Check for syllabus context (new conversation only)
+    const isNewConversation = history.length === 0;
+    const syllabusContext = isNewConversation
+      ? await this.getUserSyllabusContext(userId)
+      : null;
+
+    this.logger.log(
+      `Free chat | userId: ${userId} | isNewConversation: ${isNewConversation} | hasSyllabusContext: ${!!syllabusContext}`,
+    );
 
     // If a documentId is provided, optionally enrich the conversation with context
     let documentContext = '';
@@ -350,11 +510,23 @@ TONE & PERSONALITY:
       ? `${question}\n\n[Optional context from the student's notes]:\n${documentContext}`
       : question;
 
-    const messages = this.buildFreeChatPrompt(
-      enrichedQuestion,
-      history,
-      profile,
-    );
+    // Build messages - use syllabus-aware welcome for new conversations
+    let messages: { role: 'user' | 'assistant' | 'system'; content: string }[];
+
+    if (syllabusContext && isNewConversation) {
+      const welcomePrompt = this.buildSyllabusWelcomePrompt(
+        syllabusContext,
+        question,
+        isNewConversation,
+      );
+      messages = [
+        { role: 'system' as const, content: welcomePrompt },
+        { role: 'user' as const, content: question },
+      ];
+    } else {
+      // Regular free chat or ongoing conversation
+      messages = this.buildFreeChatPrompt(enrichedQuestion, history, profile);
+    }
 
     let answer: string;
 
@@ -375,6 +547,7 @@ TONE & PERSONALITY:
       answer,
       modelUsed: 'llama-3.3-70b-versatile (groq)',
       documentContextUsed: !!documentContext,
+      syllabusContextUsed: !!syllabusContext && isNewConversation,
     };
   }
 
@@ -386,5 +559,36 @@ TONE & PERSONALITY:
       ],
     });
     return completion.choices[0].message.content ?? '';
+  }
+
+  /**
+   * Get syllabus information for a specific subject
+   */
+  async getSubjectSyllabus(userId: string, subjectName: string) {
+    const syllabusContext = await this.getUserSyllabusContext(userId);
+
+    if (!syllabusContext?.stream) {
+      throw new BadRequestException(
+        'Please set your education level and stream in Syllabus first.',
+      );
+    }
+
+    const subject = syllabusContext.subjects.find(
+      (s) => s.name.toLowerCase() === subjectName.toLowerCase(),
+    );
+
+    if (!subject) {
+      return {
+        availableSubjects: syllabusContext.subjects.map((s) => s.name),
+        message: `I couldn't find "${subjectName}" in your ${syllabusContext.stream} stream. Here are the subjects available to you:`,
+      };
+    }
+
+    return {
+      subject: subject.name,
+      educationLevel: syllabusContext.educationLevel,
+      stream: syllabusContext.stream,
+      message: `Great choice! You're studying ${subject.name} at ${syllabusContext.educationLevel} level in the ${syllabusContext.stream} stream. What would you like to learn about ${subject.name}?`,
+    };
   }
 }

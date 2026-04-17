@@ -1,9 +1,11 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   BadRequestException,
   Logger,
+  Param,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 
@@ -52,5 +54,15 @@ export class ChatController {
     const safeHistory = Array.isArray(history) ? history : [];
 
     return this.chatService.freeChat(userId, question, safeHistory, documentId);
+  }
+
+  @Get('syllabus/:userId/:subjectName')
+  async getSubjectSyllabus(
+    @Param('userId') userId: string,
+    @Param('subjectName') subjectName: string,
+  ) {
+    this.logger.log(`[syllabus] user=${userId}, subject=${subjectName}`);
+
+    return this.chatService.getSubjectSyllabus(userId, subjectName);
   }
 }

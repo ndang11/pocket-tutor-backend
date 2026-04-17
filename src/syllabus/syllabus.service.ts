@@ -1,9 +1,49 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class SyllabusService {
+  private readonly logger = new Logger(SyllabusService.name);
+
   constructor(private prisma: PrismaService) {}
+
+  async updateUserSyllabus(userId: string, educationLevelId: string, streamId: string) {
+    this.logger.log(
+      `Updating syllabus for user ${userId}: level=${educationLevelId}, stream=${streamId}`,
+    );
+    
+    const result = await this.prisma.profile.update({
+      where: { id: userId },
+      data: {
+        educationLevelId,
+        streamId,
+      },
+      include: {
+        educationLevel: true,
+        stream: true,
+      },
+    });
+
+    this.logger.log(
+      `Syllabus updated: ${result.educationLevel?.name} - ${result.stream?.name}`,
+    );
+    
+    return result;
+  }
+
+  async getUserSyllabus(userId: string) {
+    return this.prisma.profile.findUnique({
+      where: { id: userId },
+      include: {
+        educationLevel: true,
+        stream: {
+          include: {
+            subjects: true,
+          },
+        },
+      },
+    });
+  }
 
   async getAllEducationLevels() {
     return this.prisma.educationLevel.findMany({
