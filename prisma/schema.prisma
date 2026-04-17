@@ -107,3 +107,28 @@ model StudyHistory {
 
   @@map("study_history")
 }
+
+model ChatSession {
+  id              String   @id @default(uuid())
+  userId          String
+  title           String
+  subject         String?
+  educationLevel  String?
+  stream          String?
+  lastMessage     String?
+  messageCount    Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid())
+  sessionId   String
+  role        String
+  content     String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("chat_messages")
+}

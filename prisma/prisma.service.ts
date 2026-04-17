@@ -19,6 +19,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       this.prismaClient = new PrismaClient({ adapter });
       await this.prismaClient.$connect();
       await this.ensureStudyHistoryTable();
+      await this.ensureChatSessionTables();
     } catch (e) {
       console.error('Failed to connect to database:', e);
     }
@@ -43,6 +44,36 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       `);
     } catch (e) {
       console.error('Failed to create study_history table:', e);
+    }
+  }
+
+  private async ensureChatSessionTables() {
+    try {
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          "userId" TEXT NOT NULL,
+          title TEXT NOT NULL,
+          subject TEXT,
+          "educationLevel" TEXT,
+          stream TEXT,
+          "lastMessage" TEXT,
+          "messageCount" INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          "sessionId" TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+    } catch (e) {
+      console.error('Failed to create chat session tables:', e);
     }
   }
 
