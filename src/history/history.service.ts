@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Pool } from 'pg';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export type StudyActivityType = 'flashcard' | 'quiz' | 'chat' | 'document';
 
@@ -19,22 +19,16 @@ export interface StudyActivity {
 
 @Injectable()
 export class HistoryService {
-  private pool: Pool;
-
-  constructor() {
-    this.pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  }
+  constructor(private prisma: PrismaService) {}
 
   async createActivity(
     activity: Omit<StudyActivity, 'id' | 'createdAt'>,
   ): Promise<StudyActivity> {
-    const id = require('uuid').v4();
-
-    await this.pool.query(
+    const result = await this.prisma.pool.query(
       `INSERT INTO study_history (id, "userId", type, title, description, duration, score, "totalQuestions", "correctAnswers", "documentId", created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       RETURNING id, "userId", type, title, description, duration, score, "totalQuestions", "correctAnswers", "documentId", created_at`,
       [
-        id,
         activity.userId,
         activity.type,
         activity.title,
@@ -47,11 +41,16 @@ export class HistoryService {
       ],
     );
 
-    return { ...activity, id, createdAt: new Date() };
+    const row = result.rows[0];
+    return {
+      ...activity,
+      id: row.id,
+      createdAt: row.created_at,
+    };
   }
 
   async getUserHistory(userId: string, limit = 20): Promise<StudyActivity[]> {
-    const result = await this.pool.query(
+    const result = await this.prisma.pool.query(
       `SELECT id, "userId", type, title, description, duration, score, "totalQuestions", "correctAnswers", "documentId", created_at
        FROM study_history WHERE "userId" = $1 ORDER BY created_at DESC LIMIT $2`,
       [userId, limit],
@@ -76,7 +75,7 @@ export class HistoryService {
     userId: string,
     type: StudyActivityType,
   ): Promise<StudyActivity[]> {
-    const result = await this.pool.query(
+    const result = await this.prisma.pool.query(
       `SELECT id, "userId", type, title, description, duration, score, "totalQuestions", "correctAnswers", "documentId", created_at
        FROM study_history WHERE "userId" = $1 AND type = $2 ORDER BY created_at DESC`,
       [userId, type],
@@ -98,7 +97,7 @@ export class HistoryService {
   }
 
   async deleteActivity(id: string, userId: string): Promise<boolean> {
-    const result = await this.pool.query(
+    const result = await this.prisma.pool.query(
       `DELETE FROM study_history WHERE id = $1 AND "userId" = $2 RETURNING id`,
       [id, userId],
     );
@@ -106,7 +105,7 @@ export class HistoryService {
   }
 
   async clearUserHistory(userId: string): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.prisma.pool.query(
       `DELETE FROM study_history WHERE "userId" = $1`,
       [userId],
     );
@@ -114,7 +113,7 @@ export class HistoryService {
   }
 
   async getStudyStats(userId: string) {
-    const result = await this.pool.query(
+    const result = await this.prisma.pool.query(
       `SELECT 
         type,
         COUNT(*) as total_sessions,

@@ -126,43 +126,87 @@ Answer as the ultimate friendly mentor.`;
     }
   }
 
-  private buildSyllabusWelcomePrompt(syllabusContext: {
-    educationLevel?: string;
-    educationLevelDescription?: string;
-    stream?: string;
-    streamDescription?: string;
-    subjects: { name: string; slug: string }[];
-    levelStreams?: { name: string; slug: string }[];
-  }): string {
+  private buildSyllabusWelcomePrompt(
+    syllabusContext: {
+      educationLevel?: string;
+      educationLevelDescription?: string;
+      stream?: string;
+      streamDescription?: string;
+      subjects: { name: string; slug: string }[];
+      levelStreams?: { name: string; slug: string }[];
+    },
+    userMessage: string,
+    isFirstTurn: boolean,
+  ): string {
     const subjectList = syllabusContext.subjects
       .map((s) => `• ${s.name}`)
       .join('\n');
+
+    const hasSelectedSubject = syllabusContext.subjects.some(
+      (s) =>
+        userMessage.toLowerCase().includes(s.name.toLowerCase()) ||
+        userMessage.toLowerCase().includes(s.slug.toLowerCase()),
+    );
+
+    if (hasSelectedSubject || !isFirstTurn) {
+      return `You are "Pocket Tutor" - A helpful study partner for Cameroonian students.
+
+STUDENT CONTEXT:
+- Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
+- Available Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
+
+IMPORTANT: The student has already selected their subject (or you're continuing the conversation). DO NOT repeat the welcome message or ask which subject again.
+
+When explaining topics, use this friendly color format:
+- For MAIN TOPICS (major concepts): Use **bold text with a friendly color** like: **Photosynthesis** or 🌟 **Cell Division**
+- For SUB-TOPICS (smaller topics under a main topic): Use regular text or with a softer format like: • Cell Energy or → Mitosis
+
+Use emoji prefixes to make it friendly:
+- 🌟 for main topics
+- • for sub-topics  
+- 📚 for key concepts
+- 💡 for tips or remember this points
+- 🎯 for the main focus
+
+STYLE:
+- Be friendly but professional
+- Keep responses clear and concise
+- Use headings: MAIN CONCEPT, KEY POINTS, REMEMBER THIS
+- Ask what specific topic they want to learn next
+
+Now respond to the student's message naturally without repeating the welcome!`;
+    }
 
     return `You are "Pocket Tutor" - A helpful study partner for Cameroonian students.
 
 STUDENT CONTEXT:
 - Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
-- Your Subjects: ${syllabusContext.subjects.map(s => s.name).join(', ')}
+- Your Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
 
 GREETING:
-"Hello! I can see you're in ${syllabusContext.educationLevel} studying ${syllabusContext.stream}. Here are the subjects you're taking:"
+"Hello! I'm your personal tutor. I can see you're in ${syllabusContext.educationLevel} studying ${syllabusContext.stream}. Here are your subjects:"
 
-List the subjects in a simple format like:
-- Biology
-- Chemistry
-- Physics
-- Mathematics
-- Computer Science
+List the subjects in a simple, friendly format.
 
-Then ask: "Which subject would you like to start with? Just tell me what topic you're learning and I'll explain it in a simple way."
+Then ask: "Which subject would you like to start with? Just tell me what topic you're learning and I'll explain it in a simple, fun way!"
+
+IMPORTANT: After the student picks a subject, DO NOT repeat this welcome message again in your next response. Just continue the conversation naturally.
+
+When explaining topics, use this friendly color format:
+- For MAIN TOPICS (major concepts): Use **bold text** like: **Photosynthesis** or 🌟 **Cell Division**
+- For SUB-TOPICS (smaller topics under a main topic): Use regular text or with emoji: • Cell Energy or → Mitosis
+
+Use emoji prefixes to make it friendly:
+- 🌟 for main topics
+- • for sub-topics  
+- 📚 for key concepts
+- 💡 for tips
+- 🎯 for the main focus
 
 STYLE:
-- Be friendly but professional
+- Be friendly and encouraging
 - Keep responses clear and concise
-- Use headings for topics: MAIN CONCEPT, KEY POINTS, REMEMBER THIS
-- After they pick a subject, ask what specific topic they want to learn
-
-Let me know which subject and topic you want to study!`;
+- Use headings: MAIN CONCEPT, KEY POINTS, REMEMBER THIS`;
   }
 
   private buildFreeChatPrompt(
@@ -470,8 +514,11 @@ TONE & PERSONALITY:
     let messages: { role: 'user' | 'assistant' | 'system'; content: string }[];
 
     if (syllabusContext && isNewConversation) {
-      // This is a new chat and user has syllabus context - build syllabus-aware welcome
-      const welcomePrompt = this.buildSyllabusWelcomePrompt(syllabusContext);
+      const welcomePrompt = this.buildSyllabusWelcomePrompt(
+        syllabusContext,
+        question,
+        isNewConversation,
+      );
       messages = [
         { role: 'system' as const, content: welcomePrompt },
         { role: 'user' as const, content: question },

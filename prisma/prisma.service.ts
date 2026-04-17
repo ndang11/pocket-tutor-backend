@@ -6,7 +6,7 @@ import 'dotenv/config';
 
 @Injectable()
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
-  private pool: Pool;
+  public pool: Pool;
   private prismaClient: PrismaClient;
 
   async onModuleInit() {
@@ -18,8 +18,31 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       const adapter = new PrismaPg(this.pool);
       this.prismaClient = new PrismaClient({ adapter });
       await this.prismaClient.$connect();
+      await this.ensureStudyHistoryTable();
     } catch (e) {
       console.error('Failed to connect to database:', e);
+    }
+  }
+
+  private async ensureStudyHistoryTable() {
+    try {
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS study_history (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          "userId" TEXT NOT NULL,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          duration INT,
+          score INT,
+          "totalQuestions" INT,
+          "correctAnswers" INT,
+          "documentId" TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+    } catch (e) {
+      console.error('Failed to create study_history table:', e);
     }
   }
 
