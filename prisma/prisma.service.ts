@@ -11,9 +11,9 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     try {
-      this.pool = new Pool({ 
+      this.pool = new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
+        ssl: { rejectUnauthorized: false },
       });
       const adapter = new PrismaPg(this.pool);
       this.prismaClient = new PrismaClient({ adapter });
@@ -82,7 +82,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       await this.prismaClient.$disconnect();
     }
     if (this.pool) {
-      this.pool.end();
+      await this.pool.end();
     }
   }
 
@@ -90,8 +90,24 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prismaClient.profile;
   }
 
+  get topicMastery() {
+    return this.prismaClient.topicMastery;
+  }
+
+  get learningProfile() {
+    return this.prismaClient.learningProfile;
+  }
+
   get documentation() {
     return this.prismaClient.documentation;
+  }
+
+  get chatSession() {
+    return this.prismaClient.chatSession;
+  }
+
+  get chatMessage() {
+    return this.prismaClient.chatMessage;
   }
 
   get document_chunks() {
@@ -115,14 +131,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   }
 
   get $connect() {
-    return this.prismaClient.$connect;
+    return this.prismaClient.$connect.bind(this.prismaClient);
   }
 
   get $disconnect() {
-    return this.prismaClient.$disconnect;
+    return this.prismaClient.$disconnect.bind(this.prismaClient);
   }
 
   get $transaction() {
-    return this.prismaClient.$transaction;
+    return this.prismaClient.$transaction.bind(this.prismaClient);
   }
 }

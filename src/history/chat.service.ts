@@ -2,7 +2,8 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ChatSessionService } from './chat-session.service';
+import { ChatSessionService } from '../chat/chat-session.service';
+
 import OpenAI from 'openai';
 
 @Injectable()
@@ -132,9 +133,10 @@ Answer as the ultimate friendly mentor.`;
     },
     userMessage: string,
     isFirstTurn: boolean,
-    profile?: any,
   ): string {
-    const studentName = profile?.full_name || 'there';
+    const subjectList = syllabusContext.subjects
+      .map((s) => `• ${s.name}`)
+      .join('\n');
 
     const hasSelectedSubject = syllabusContext.subjects.some(
       (s) =>
@@ -143,16 +145,11 @@ Answer as the ultimate friendly mentor.`;
     );
 
     if (hasSelectedSubject || !isFirstTurn) {
-      // In the greeting section, change to:
       return `You are "Pocket Tutor" - A helpful study partner for Cameroonian students.
 
-  STUDENT CONTEXT:
-  - Name: ${studentName}  // ← ADD
-  - Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
-  - Your Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
-  
-  GREETING:
-  "Hello ${studentName}! I'm your personal tutor..."
+STUDENT CONTEXT:
+- Level: ${syllabusContext.educationLevel} - ${syllabusContext.stream}
+- Available Subjects: ${syllabusContext.subjects.map((s) => s.name).join(', ')}
 
 IMPORTANT: The student has already selected their subject and/or topic. Give COMPREHENSIVE, DETAILED notes with explanations, not short responses.
 
@@ -395,7 +392,7 @@ TONE & PERSONALITY:
     documentId: string,
     userId: string,
     question: string,
-    _sessionId: string,
+    sessionId?: string,
   ) {
     if (!userId?.trim() || !question?.trim()) {
       throw new BadRequestException('userId and question are required');
@@ -417,8 +414,6 @@ TONE & PERSONALITY:
       throw new BadRequestException(`Vector search failed: ${error.message}`);
     }
 
-    this.logger.log(`Found ${chunks?.length || 0} chunks`);
-
     if (!chunks || chunks.length === 0) {
       throw new BadRequestException(
         'No relevant content found in this document for your question.',
@@ -426,11 +421,6 @@ TONE & PERSONALITY:
     }
 
     const rerankedChunks = this.rerankChunks(chunks, question).slice(0, 8);
-
-    this.logger.log(
-      `Using top ${rerankedChunks.length} chunks after reranking`,
-    );
-
     const { data: profile } = await this.supabase
       .getClient()
       .from('profiles')
@@ -442,23 +432,41 @@ TONE & PERSONALITY:
     const prompt = this.buildDocumentPrompt(context, question, profile);
 
     let answer: string;
-
     try {
       answer = await this.askGroq([{ role: 'user', content: prompt }]);
-      this.logger.log(
-        `Document chat answered | Document: ${documentId} | Chunks: ${rerankedChunks.length}`,
-      );
-    } catch (err) {
-      this.logger.error('Groq failed', err?.message);
+    } catch {
       throw new BadRequestException(
         'AI service temporarily unavailable. Please try again in a moment.',
       );
     }
 
+    if (sessionId) {
+      try {
+        await this.prisma.chatMessage.create({
+          data: {
+            sessionId: sessionId,
+            role: 'user',
+            content: question,
+          },
+        });
+
+        await this.prisma.chatMessage.create({
+          data: {
+            sessionId: sessionId,
+            role: 'assistant',
+            content: answer,
+            pedagogicalAction: 'EXPLAINED',
+          },
+        });
+        this.logger.log(`[ask] Saved message pair for session: ${sessionId}`);
+      } catch (dbError) {
+        this.logger.error(`[ask] DB Save error: ${dbError.message}`);
+      }
+    }
+
     return {
       question,
       answer,
-      // modelUsed: 'llama-3.3-70b-versatile (groq)', // remove
       sourcesUsed: rerankedChunks.length,
       sources: rerankedChunks.map((c: any) => ({
         chunkIndex: c.chunk_index,
@@ -536,7 +544,6 @@ TONE & PERSONALITY:
         syllabusContext,
         question,
         isNewConversation,
-        profile,
       );
       messages = [
         { role: 'system' as const, content: welcomePrompt },
@@ -547,38 +554,50 @@ TONE & PERSONALITY:
     }
 
     let answer: string;
-
     try {
       answer = await this.askGroq(messages);
-      this.logger.log(
-        `Free chat answered | userId: ${userId} | historyLength: ${history.length}`,
-      );
     } catch (err) {
       this.logger.error('Groq failed', err?.message);
-      throw new BadRequestException(
-        'AI service temporarily unavailable. Please try again in a moment.',
-      );
+      throw new BadRequestException('AI service unavailable');
     }
 
     if (sessionId) {
       try {
-        await this.chatSessionService.addMessage(sessionId, 'user', question);
-        await this.chatSessionService.addMessage(
-          sessionId,
-          'assistant',
-          answer,
-        );
+        console.log('Attempting to save messages for session:', sessionId);
+
+        const userMsg = await this.prisma.chatMessage.create({
+          data: {
+            sessionId: sessionId,
+            role: 'user',
+            content: question,
+          },
+        });
+        console.log(' User message saved:', userMsg.id);
+
+        const aiMsg = await this.prisma.chatMessage.create({
+          data: {
+            sessionId: sessionId,
+            role: 'assistant',
+            content: answer,
+            pedagogicalAction: 'EXPLAINED',
+          },
+        });
+        console.log('AI message saved:', aiMsg.id);
+
         await this.chatSessionService.updateSession(
           sessionId,
-          answer.slice(0, 120),
-          history.length + 2,
+          answer.slice(0, 100),
+          await this.prisma.chatMessage.count({ where: { sessionId } }),
         );
-        this.logger.log(`✅ Saved messages for session: ${sessionId}`);
+
+        this.logger.log(
+          `Successfully saved message pair for session: ${sessionId}`,
+        );
       } catch (dbError) {
-        this.logger.error(`❌ DB Save error: ${dbError.message}`);
+        this.logger.error(`Failed to save to DB: ${dbError.message}`);
+        console.error(' DB Save FULL ERROR:', dbError);
       }
     }
-
     return {
       question,
       answer,

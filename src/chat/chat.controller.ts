@@ -19,6 +19,7 @@ export class ChatController {
   async ask(
     @Body('documentId') documentId: string,
     @Body('userId') userId: string,
+    @Body('sessionId') sessionId: string,
     @Body('question') question: string,
   ) {
     this.logger.log(
@@ -32,13 +33,14 @@ export class ChatController {
       return this.chatService.freeChat(userId, question, []);
     }
 
-    return this.chatService.ask(documentId, userId, question);
+    return this.chatService.ask(documentId, userId, question, sessionId);
   }
 
   @Post('free')
   async freeChat(
     @Body('userId') userId: string,
     @Body('question') question: string,
+    @Body('sessionId') sessionId: string,
     @Body('documentId') documentId?: string,
     @Body('history')
     history: { role: 'user' | 'assistant'; content: string }[] = [],
@@ -53,7 +55,13 @@ export class ChatController {
 
     const safeHistory = Array.isArray(history) ? history : [];
 
-    return this.chatService.freeChat(userId, question, safeHistory, documentId);
+    return this.chatService.freeChat(
+      userId,
+      question,
+      safeHistory,
+      documentId,
+      sessionId,
+    );
   }
 
   @Get('syllabus/:userId/:subjectName')

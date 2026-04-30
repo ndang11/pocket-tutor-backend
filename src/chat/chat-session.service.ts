@@ -85,15 +85,22 @@ export class ChatSessionService {
       [sessionId, userId],
     );
     if ((result.rowCount ?? 0) > 0) {
-      await this.prisma.pool.query(`DELETE FROM chat_messages WHERE "sessionId" = $1`, [sessionId]);
+      await this.prisma.pool.query(
+        `DELETE FROM chat_messages WHERE "sessionId" = $1`,
+        [sessionId],
+      );
     }
     return (result.rowCount ?? 0) > 0;
   }
 
-  async addMessage(sessionId: string, role: string, content: string): Promise<ChatMessageRecord> {
+  async addMessage(
+    sessionId: string,
+    role: string,
+    content: string,
+  ): Promise<ChatMessageRecord> {
     const result = await this.prisma.pool.query(
-      `INSERT INTO chat_messages ("sessionId", role, content, created_at)
-       VALUES ($1, $2, $3, NOW())
+      `INSERT INTO chat_messages (id, "sessionId", role, content, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, NOW())
        RETURNING id, "sessionId", role, content, created_at as "createdAt"`,
       [sessionId, role, content],
     );

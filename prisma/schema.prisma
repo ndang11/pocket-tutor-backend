@@ -6,17 +6,30 @@ datasource db {
   provider = "postgresql"
 }
 
+enum PedagogicalAction {
+  HINTED
+  EXPLAINED
+  TESTED
+  SUMMARIZED
+  SCAFFOLDED
+  CORRECTED
+  SOCIOCRATIC_QUESTIONING // Asking a question to lead them to the answer
+  REINFORCED // Praising a correct answer to build confidence
+}
+
 model Profile {
-  id               String           @id @default(uuid())
+  id               String            @id @default(uuid())
   full_name        String?
-  academic_system String?
+  academic_system  String?
   educationLevelId String?
-  educationLevel  EducationLevel? @relation(fields: [educationLevelId], references: [id])
-  streamId        String?
-  stream         Stream?         @relation(fields: [streamId], references: [id])
-  documents      Documentation[]
-  flashcards     Flashcard[]
-  created_at     DateTime         @default(now())
+  educationLevel   EducationLevel?   @relation(fields: [educationLevelId], references: [id])
+  streamId         String?
+  stream           Stream?           @relation(fields: [streamId], references: [id])
+  documents        Documentation[]
+  flashcards       Flashcard[]
+  created_at       DateTime          @default(now())
+  learningProfiles LearningProfile[]
+
   @@map("profiles")
 }
 
@@ -30,32 +43,33 @@ model Documentation {
   profile         Profile           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   flashcards Flashcard[]
-  @@map("documents") 
+
+  @@map("documents")
 }
 
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model document_chunks {
-  id          String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   document_id String
   user_id     String
   chunk_index Int
   content     String
   embedding   Unsupported("vector(3072)")?
-  created_at  DateTime?              @default(now()) @db.Timestamptz(6)
-  documents   Documentation          @relation(fields: [document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  created_at  DateTime?                    @default(now()) @db.Timestamptz(6)
+  documents   Documentation                @relation(fields: [document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([document_id, chunk_index])
 }
 
 model Flashcard {
-  id         String   @id @default(uuid())
-  front      String   @db.Text
-  back       String   @db.Text
+  id         String        @id @default(uuid())
+  front      String        @db.Text
+  back       String        @db.Text
   documentId String
   userId     String
-  created_at DateTime @default(now())
+  created_at DateTime      @default(now())
   document   Documentation @relation(fields: [documentId], references: [id], onDelete: Cascade)
   profile    Profile       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@map("flashcards")
 }
 
@@ -66,20 +80,22 @@ model EducationLevel {
   order       Int
   description String?
   streams     Stream[]
-  profiles   Profile[]
-  created_at  DateTime   @default(now())
+  profiles    Profile[]
+  created_at  DateTime  @default(now())
+
   @@map("education_levels")
 }
 
 model Stream {
-  id               String          @id @default(uuid())
+  id               String         @id @default(uuid())
   name             String
-  slug             String        @unique
-  description     String?
+  slug             String         @unique
+  description      String?
   educationLevelId String
-  educationLevel  EducationLevel @relation(fields: [educationLevelId], references: [id], onDelete: Cascade)
+  educationLevel   EducationLevel @relation(fields: [educationLevelId], references: [id], onDelete: Cascade)
   subjects         Subject[]
-  profiles        Profile[]
+  profiles         Profile[]
+
   @@map("streams")
 }
 
@@ -88,47 +104,81 @@ model Subject {
   name     String
   slug     String
   streamId String
-  stream   Stream  @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  stream   Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+
   @@map("subjects")
 }
 
 model StudyHistory {
-  id              String   @id @default(uuid())
-  userId          String
-  type            String
-  title           String
-  description     String?
-  duration        Int?
-  score           Int?
-  totalQuestions  Int?
-  correctAnswers  Int?
-  documentId      String?
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(uuid())
+  userId         String
+  type           String
+  title          String
+  description    String?
+  duration       Int?
+  score          Int?
+  totalQuestions Int?
+  correctAnswers Int?
+  documentId     String?
+  createdAt      DateTime @default(now()) @map("created_at")
 
   @@map("study_history")
 }
 
 model ChatSession {
-  id              String   @id @default(uuid())
-  userId          String
-  title           String
-  subject         String?
-  educationLevel  String?
-  stream          String?
-  lastMessage     String?
-  messageCount    Int      @default(0)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  userId         String
+  title          String
+  subject        String?
+  educationLevel String?
+  stream         String?
+  lastMessage    String?
+  messageCount   Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("chat_sessions")
 }
 
 model ChatMessage {
-  id          String   @id @default(uuid())
-  sessionId   String
-  role        String
-  content     String
-  createdAt   DateTime @default(now()) @map("created_at")
+  id        String   @id @default(uuid())
+  sessionId String
+  role      String
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+  pedagogicalAction PedagogicalAction? 
 
   @@map("chat_messages")
+}
+
+model LearningProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique()
+  learningStyle  String   @default("balanced")
+  pedagogyMode   String   @default("explanatory")
+  pace           String   @default("medium")
+  difficultyPrep String   @default("adaptive")
+  createdAt      DateTime @default(now())
+
+  profile Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TopicMastery {
+  id            String   @id @default(uuid())
+
+  userId        String
+  subjectId     String?
+
+  topic         String
+  masteryScore  Int      @default(0)
+
+  weakAreas     String?
+  strongAreas   String?
+
+  lastStudiedAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, topic])
+  @@map("topic_mastery")
 }
